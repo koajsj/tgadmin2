@@ -19,6 +19,7 @@ class GroupSettingsRecord:
     enabled: bool
     timeout_seconds: int
     expire_action: str
+    auto_delete_seconds: int
     created_at: str
     updated_at: str
 
@@ -47,6 +48,9 @@ class VerificationChallenge:
 
     def passed_at_dt(self) -> datetime | None:
         return datetime.fromisoformat(self.passed_at) if self.passed_at else None
+
+    def is_pending(self) -> bool:
+        return self.status == ChallengeStatus.PENDING
 
 
 @dataclass(slots=True)

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS group_settings (
     enabled INTEGER NOT NULL DEFAULT 1,
     timeout_seconds INTEGER NOT NULL,
     expire_action TEXT NOT NULL,
+    auto_delete_seconds INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -62,5 +63,17 @@ def connect(db_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.executescript(SCHEMA_SQL)
+    _ensure_schema_upgrades(connection)
     connection.commit()
     return connection
+
+
+def _ensure_schema_upgrades(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(group_settings)").fetchall()
+    }
+    if "auto_delete_seconds" not in columns:
+        connection.execute(
+            "ALTER TABLE group_settings ADD COLUMN auto_delete_seconds INTEGER NOT NULL DEFAULT 0"
+        )

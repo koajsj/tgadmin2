@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import asyncio
-
 from aiogram import Bot, Router
 from aiogram.enums import ChatType
-from aiogram.types import Message
+from aiogram.types import ChatMemberUpdated, Message
 from aiogram.utils.deep_linking import create_start_link
 
-from bot.services import AuditService, MembershipService, VerificationService
+from bot.services.audit import AuditService
+from bot.services.membership import MembershipService
+from bot.services.verification import VerificationService
 from bot.storage import Repository
+from bot.utils import schedule_delete
 
 
 def build_group_router(
@@ -16,9 +17,25 @@ def build_group_router(
     verification_service: VerificationService,
     membership_service: MembershipService,
     audit_service: AuditService,
-    auto_delete_seconds: int,
 ) -> Router:
     router = Router(name="group-events")
+
+    @router.chat_member()
+    async def on_chat_member_update(event: ChatMemberUpdated) -> None:
+        if event.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            return
+        old_status = getattr(event.old_chat_member, "status", None)
+        new_status = getattr(event.new_chat_member, "status", None)
+        if old_status == new_status:
+            return
+        audit_service.log(
+            "chat_member_changed",
+            chat_id=event.chat.id,
+            user_id=event.new_chat_member.user.id,
+            changed_by=event.from_user.id if event.from_user else None,
+            old_status=str(old_status),
+            new_status=str(new_status),
+        )
 
     @router.message(lambda message: bool(message.new_chat_members))
     async def on_new_members(message: Message, bot: Bot) -> None:
@@ -77,10 +94,7 @@ def build_group_router(
                 f"验证有效期：{settings.timeout_seconds} 秒。"
             )
             sent = await message.answer(prompt, parse_mode="HTML")
-            if auto_delete_seconds > 0:
-                asyncio.create_task(
-                    _delete_later(bot, message.chat.id, sent.message_id, auto_delete_seconds)
-                )
+            schedule_delete(bot, sent, settings.auto_delete_seconds)
             verification_service.set_prompt_message_id(challenge.id, sent.message_id)
             audit_service.log(
                 "challenge_created" if created else "challenge_reused",
@@ -90,11 +104,3 @@ def build_group_router(
             )
 
     return router
-
-
-async def _delete_later(bot: Bot, chat_id: int, message_id: int, delay_seconds: int) -> None:
-    await asyncio.sleep(delay_seconds)
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception:
-        return

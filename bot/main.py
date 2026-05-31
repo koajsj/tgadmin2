@@ -11,7 +11,10 @@ from bot.config import Settings
 from bot.db import connect
 from bot.handlers import build_admin_router, build_group_router, build_private_router
 from bot.logging import configure_logging
-from bot.services import AuditService, MembershipService, SchedulerService, VerificationService
+from bot.services.audit import AuditService
+from bot.services.membership import MembershipService
+from bot.services.scheduler import SchedulerService
+from bot.services.verification import VerificationService
 from bot.storage import Repository
 
 LOGGER = logging.getLogger(__name__)
@@ -22,7 +25,12 @@ async def run() -> None:
     configure_logging(settings.log_level)
 
     connection = connect(settings.db_path)
-    repository = Repository(connection, settings.verify_timeout_seconds, settings.expire_action)
+    repository = Repository(
+        connection,
+        settings.verify_timeout_seconds,
+        settings.expire_action,
+        settings.group_message_auto_delete_seconds,
+    )
     audit_service = AuditService(repository)
     verification_service = VerificationService(repository)
     membership_service = MembershipService()
@@ -42,7 +50,13 @@ async def run() -> None:
 
     dispatcher = Dispatcher()
     dispatcher.include_router(
-        build_admin_router(repository, verification_service, membership_service, audit_service)
+        build_admin_router(
+            repository,
+            verification_service,
+            membership_service,
+            audit_service,
+            settings.max_failed_attempts,
+        )
     )
     dispatcher.include_router(
         build_group_router(
@@ -50,11 +64,16 @@ async def run() -> None:
             verification_service,
             membership_service,
             audit_service,
-            settings.group_message_auto_delete_seconds,
         )
     )
     dispatcher.include_router(
-        build_private_router(repository, verification_service, membership_service, audit_service)
+        build_private_router(
+            repository,
+            verification_service,
+            membership_service,
+            audit_service,
+            settings.max_failed_attempts,
+        )
     )
 
     scheduler = SchedulerService(

@@ -64,7 +64,8 @@ class MembershipService:
 
     async def unrestrict_member(self, bot: Bot, chat_id: int, user_id: int) -> ActionResult:
         try:
-            await bot.restrict_chat_member(chat_id, user_id, permissions=UNRESTRICTED_PERMISSIONS)
+            permissions = await self._resolve_default_permissions(bot, chat_id)
+            await bot.restrict_chat_member(chat_id, user_id, permissions=permissions)
             return ActionResult(True)
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
             LOGGER.warning("unrestrict_member failed chat_id=%s user_id=%s error=%s", chat_id, user_id, exc)
@@ -78,3 +79,11 @@ class MembershipService:
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
             LOGGER.warning("kick_member failed chat_id=%s user_id=%s error=%s", chat_id, user_id, exc)
             return ActionResult(False, str(exc))
+
+    async def _resolve_default_permissions(self, bot: Bot, chat_id: int) -> ChatPermissions:
+        try:
+            chat = await bot.get_chat(chat_id)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            LOGGER.warning("get_chat permissions failed chat_id=%s error=%s", chat_id, exc)
+            return UNRESTRICTED_PERMISSIONS
+        return chat.permissions or UNRESTRICTED_PERMISSIONS

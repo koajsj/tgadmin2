@@ -11,6 +11,7 @@ class Settings:
     db_path: Path
     verify_timeout_seconds: int = 600
     expire_action: str = "kick"
+    max_failed_attempts: int = 3
     log_level: str = "INFO"
     group_message_auto_delete_seconds: int = 0
     scheduler_interval_seconds: int = 30
@@ -24,6 +25,7 @@ class Settings:
 
         db_path = Path(os.getenv("DB_PATH", "./data/bot.sqlite3")).expanduser()
         verify_timeout_seconds = _read_int("VERIFY_TIMEOUT_SECONDS", 600, 60, 86400)
+        max_failed_attempts = _read_int("MAX_FAILED_ATTEMPTS", 3, 1, 20)
         group_message_auto_delete_seconds = _read_int(
             "GROUP_MESSAGE_AUTO_DELETE_SECONDS", 0, 0, 86400
         )
@@ -36,6 +38,7 @@ class Settings:
             db_path=db_path,
             verify_timeout_seconds=verify_timeout_seconds,
             expire_action=expire_action,
+            max_failed_attempts=max_failed_attempts,
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             group_message_auto_delete_seconds=group_message_auto_delete_seconds,
             scheduler_interval_seconds=scheduler_interval_seconds,

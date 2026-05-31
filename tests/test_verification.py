@@ -23,7 +23,7 @@ class VerificationTests(unittest.TestCase):
         connection = sqlite3.connect(":memory:", check_same_thread=False)
         connection.row_factory = sqlite3.Row
         connection.executescript(SCHEMA_SQL)
-        repository = Repository(connection, 600, "kick")
+        repository = Repository(connection, 600, "kick", 0)
         now = datetime.now(timezone.utc) - timedelta(seconds=1)
         connection.execute(
             """

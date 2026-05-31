@@ -10,11 +10,18 @@ from bot.models import AuditLogRecord, GroupSettingsRecord, VerificationChalleng
 
 
 class Repository:
-    def __init__(self, connection: sqlite3.Connection, default_timeout: int, default_expire_action: str):
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        default_timeout: int,
+        default_expire_action: str,
+        default_auto_delete_seconds: int,
+    ):
         self._connection = connection
         self._lock = threading.RLock()
         self._default_timeout = default_timeout
         self._default_expire_action = default_expire_action
+        self._default_auto_delete_seconds = default_auto_delete_seconds
 
     def ensure_group_settings(self, chat_id: int) -> GroupSettingsRecord:
         with self._lock:
@@ -24,10 +31,19 @@ class Repository:
             now = utc_now().isoformat()
             self._connection.execute(
                 """
-                INSERT INTO group_settings (chat_id, enabled, timeout_seconds, expire_action, created_at, updated_at)
-                VALUES (?, 1, ?, ?, ?, ?)
+                INSERT INTO group_settings (
+                    chat_id, enabled, timeout_seconds, expire_action, auto_delete_seconds, created_at, updated_at
+                )
+                VALUES (?, 1, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, self._default_timeout, self._default_expire_action, now, now),
+                (
+                    chat_id,
+                    self._default_timeout,
+                    self._default_expire_action,
+                    self._default_auto_delete_seconds,
+                    now,
+                    now,
+                ),
             )
             self._connection.commit()
             return self.get_group_settings(chat_id)
@@ -47,20 +63,26 @@ class Repository:
         enabled: bool | None = None,
         timeout_seconds: int | None = None,
         expire_action: str | None = None,
+        auto_delete_seconds: int | None = None,
     ) -> GroupSettingsRecord:
         with self._lock:
             current = self.ensure_group_settings(chat_id)
             next_enabled = current.enabled if enabled is None else enabled
             next_timeout = current.timeout_seconds if timeout_seconds is None else timeout_seconds
             next_action = current.expire_action if expire_action is None else expire_action
+            next_auto_delete = (
+                current.auto_delete_seconds
+                if auto_delete_seconds is None
+                else auto_delete_seconds
+            )
             now = utc_now().isoformat()
             self._connection.execute(
                 """
                 UPDATE group_settings
-                SET enabled = ?, timeout_seconds = ?, expire_action = ?, updated_at = ?
+                SET enabled = ?, timeout_seconds = ?, expire_action = ?, auto_delete_seconds = ?, updated_at = ?
                 WHERE chat_id = ?
                 """,
-                (1 if next_enabled else 0, next_timeout, next_action, now, chat_id),
+                (1 if next_enabled else 0, next_timeout, next_action, next_auto_delete, now, chat_id),
             )
             self._connection.commit()
             return self.get_group_settings(chat_id)
@@ -93,7 +115,7 @@ class Repository:
                 """
                 SELECT * FROM verification_challenges
                 WHERE user_id = ? AND status = 'pending'
-                ORDER BY id DESC
+                ORDER BY updated_at DESC, id DESC
                 LIMIT 1
                 """,
                 (user_id,),
@@ -233,6 +255,20 @@ class Repository:
             self._connection.commit()
             return self.get_challenge_by_id(challenge_id)
 
+    def mark_failed(self, challenge_id: int) -> VerificationChallenge:
+        now = utc_now().isoformat()
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE verification_challenges
+                SET status = 'failed', invalidated_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (now, now, challenge_id),
+            )
+            self._connection.commit()
+            return self.get_challenge_by_id(challenge_id)
+
     def list_expired_pending_challenges(self, now: datetime | None = None, limit: int = 100) -> list[VerificationChallenge]:
         now_value = (now or utc_now()).isoformat()
         with self._lock:
@@ -299,6 +335,7 @@ def _row_to_group(row: sqlite3.Row) -> GroupSettingsRecord:
         enabled=bool(row["enabled"]),
         timeout_seconds=int(row["timeout_seconds"]),
         expire_action=str(row["expire_action"]),
+        auto_delete_seconds=int(row["auto_delete_seconds"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

@@ -1,20 +1,37 @@
 from __future__ import annotations
 
-import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
 
 from bot.models import ChallengeStatus, VerificationChallenge
 from bot.storage import Repository
 
-LOGGER = logging.getLogger(__name__)
-
 WORD_POOL = (
-    "amber", "birch", "cinder", "delta", "ember", "fjord", "grove", "harbor",
-    "iris", "juniper", "kepler", "lilac", "maple", "nova", "onyx", "pine",
-    "quartz", "river", "spruce", "thunder", "umbra", "velvet", "willow", "zenith",
+    "amber",
+    "birch",
+    "cinder",
+    "delta",
+    "ember",
+    "fjord",
+    "grove",
+    "harbor",
+    "iris",
+    "juniper",
+    "kepler",
+    "lilac",
+    "maple",
+    "nova",
+    "onyx",
+    "pine",
+    "quartz",
+    "river",
+    "spruce",
+    "thunder",
+    "umbra",
+    "velvet",
+    "willow",
+    "zenith",
 )
 
 
@@ -44,20 +61,24 @@ class VerificationService:
             return active, False
 
         spec = build_challenge(display_name)
-        token = f"verify_{secrets.token_urlsafe(18)}"
+        token = secrets.token_urlsafe(18)
         challenge = self._repository.create_challenge(
             chat_id=chat_id,
             user_id=user_id,
             user_chat_instance=user_chat_instance,
             join_message_id=join_message_id,
-            start_token=token.removeprefix("verify_"),
+            start_token=token,
             challenge_text=spec.display_text,
             expected_response=spec.expected_response,
             timeout_seconds=timeout_seconds,
         )
         return challenge, True
 
-    def validate_start_token(self, raw_start_param: str | None, user_id: int) -> tuple[VerificationChallenge | None, str | None]:
+    def validate_start_token(
+        self,
+        raw_start_param: str | None,
+        user_id: int,
+    ) -> tuple[VerificationChallenge | None, str | None]:
         if not raw_start_param or not raw_start_param.startswith("verify_"):
             return None, "请使用群里的验证链接进入私聊。"
 
@@ -70,13 +91,11 @@ class VerificationService:
         if challenge.status != ChallengeStatus.PENDING:
             return None, "该验证任务已结束。"
         if challenge.expires_at_dt() <= datetime.now(challenge.expires_at_dt().tzinfo):
-            return None, "该验证任务已过期，请回到群里重新触发。"
+            return None, "该验证任务已过期，请回到群里重新获取。"
         return challenge, None
 
     def validate_response(self, challenge: VerificationChallenge, response_text: str) -> bool:
-        expected = normalize_response(challenge.expected_response)
-        actual = normalize_response(response_text)
-        return expected == actual
+        return normalize_response(challenge.expected_response) == normalize_response(response_text)
 
     def record_attempt(self, challenge_id: int) -> int:
         return self._repository.increment_attempt_count(challenge_id)
@@ -86,6 +105,9 @@ class VerificationService:
 
     def mark_expired(self, challenge_id: int) -> VerificationChallenge:
         return self._repository.mark_expired(challenge_id)
+
+    def mark_failed(self, challenge_id: int) -> VerificationChallenge:
+        return self._repository.mark_failed(challenge_id)
 
     def set_prompt_message_id(self, challenge_id: int, message_id: int) -> None:
         self._repository.set_prompt_message_id(challenge_id, message_id)
@@ -105,36 +127,33 @@ class VerificationService:
 
 def build_challenge(display_name: str) -> ChallengeSpec:
     name_fragment = sanitize_name_fragment(display_name)
-    random_words = _pick_words(name_fragment)
+    first_word, second_word = pick_words(name_fragment)
     number = f"{secrets.randbelow(90) + 10:02d}"
-    display_parts = [random_words[0], number, random_words[1]]
-    display_text = " ".join(display_parts)
-    expected = "-".join(part.upper() for part in reversed(display_parts))
-    return ChallengeSpec(display_text=display_text, expected_response=expected)
+    display_parts = [first_word, number, second_word]
+    return ChallengeSpec(
+        display_text=" ".join(display_parts),
+        expected_response="-".join(part.upper() for part in reversed(display_parts)),
+    )
 
 
-def _pick_words(name_fragment: str) -> tuple[str, str]:
+def pick_words(name_fragment: str) -> tuple[str, str]:
     first_index = secrets.randbelow(len(WORD_POOL))
     second_index = secrets.randbelow(len(WORD_POOL))
-    first = WORD_POOL[first_index]
-    second = WORD_POOL[second_index]
-    if name_fragment and name_fragment not in {first, second}:
-        return first, name_fragment
-    if first == second:
-        second = WORD_POOL[(second_index + 1) % len(WORD_POOL)]
-    return first, second
+    first_word = WORD_POOL[first_index]
+    second_word = WORD_POOL[second_index]
+    if name_fragment and name_fragment not in {first_word, second_word}:
+        return first_word, name_fragment
+    if first_word == second_word:
+        second_word = WORD_POOL[(second_index + 1) % len(WORD_POOL)]
+    return first_word, second_word
 
 
 def sanitize_name_fragment(name: str) -> str:
     letters = [char.lower() for char in name if char.isalnum()]
-    if not letters:
-        return ""
-    fragment = "".join(letters[:8])
-    return fragment
+    return "".join(letters[:8])
 
 
 def normalize_response(value: str) -> str:
     compact = value.strip().replace("_", "-")
     compact = compact.replace(" - ", "-").replace("- ", "-").replace(" -", "-")
-    parts = [part for part in compact.split() if part]
-    return " ".join(parts).upper()
+    return " ".join(part for part in compact.split() if part).upper()

@@ -1,0 +1,1 @@
+"""Telegram verification bot package."""

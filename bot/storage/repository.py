@@ -649,6 +649,12 @@ class Repository:
             row = self._connection.execute("SELECT COUNT(*) AS count FROM group_profiles").fetchone()
             return int(row["count"])
 
+    def get_latest_group_chat_id(self) -> int | None:
+        group = self.list_groups(limit=1, offset=0)
+        if not group:
+            return None
+        return group[0].chat_id
+
     def sum_group_member_count(self) -> int:
         with self._lock:
             row = self._connection.execute(

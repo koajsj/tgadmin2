@@ -18,6 +18,7 @@ def build_admin_router(
     verification_service: VerificationService,
     membership_service: MembershipService,
     audit_service: AuditService,
+    owner_id: int,
     max_failed_attempts: int,
 ) -> Router:
     router = Router(name="admin-commands")
@@ -28,31 +29,33 @@ def build_admin_router(
             settings = repository.ensure_group_settings(message.chat.id)
             schedule_delete(bot, sent, settings.auto_delete_seconds)
 
-    async def ensure_admin(message: Message, bot: Bot) -> bool:
+    async def ensure_manager(message: Message, bot: Bot) -> bool:
         if not message.from_user or message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
-            await reply(message, bot, "该命令只能在群里使用。")
+            await reply(message, bot, "此命令只能在群里使用。")
             return False
+        if message.from_user.id == owner_id:
+            return True
         if not await membership_service.is_admin(bot, message.chat.id, message.from_user.id):
-            await reply(message, bot, "只有群管理员可以使用这个命令。")
+            await reply(message, bot, "仅群管理员或 OWNER 可使用此命令。")
             return False
         return True
-
-    async def ensure_manager(message: Message, bot: Bot) -> bool:
-        return await ensure_admin(message, bot)
 
     @router.message(Command("status"))
     async def status(message: Message, bot: Bot) -> None:
         settings = repository.ensure_group_settings(message.chat.id)
         pending_count = repository.count_pending_challenges(message.chat.id)
-        text = (
-            f"验证状态：{'启用' if settings.enabled else '禁用'}\n"
-            f"超时时间：{settings.timeout_seconds} 秒\n"
-            f"过期策略：{settings.expire_action}\n"
-            f"最大失败次数：{max_failed_attempts} 次\n"
-            f"自动删消息：{settings.auto_delete_seconds} 秒\n"
-            f"待验证人数：{pending_count}"
+        text = "\n".join(
+            [
+                "<b>群验证状态</b>",
+                f"状态：{'开启' if settings.enabled else '关闭'}",
+                f"超时：{settings.timeout_seconds} 秒",
+                f"策略：{settings.expire_action}",
+                f"失败上限：{max_failed_attempts}",
+                f"自动删除：{settings.auto_delete_seconds} 秒",
+                f"待验证人数：{pending_count}",
+            ]
         )
-        await reply(message, bot, text)
+        await reply(message, bot, text, parse_mode="HTML")
 
     @router.message(Command("enable"))
     async def enable(message: Message, bot: Bot) -> None:
@@ -60,7 +63,11 @@ def build_admin_router(
             return
         settings = repository.update_group_settings(message.chat.id, enabled=True)
         audit_service.log("group_enabled", chat_id=message.chat.id, user_id=message.from_user.id)
-        await reply(message, bot, f"已启用入群验证，超时时间 {settings.timeout_seconds} 秒。")
+        await reply(
+            message,
+            bot,
+            f"已开启入群验证，超时 {settings.timeout_seconds} 秒。",
+        )
 
     @router.message(Command("disable"))
     async def disable(message: Message, bot: Bot) -> None:
@@ -68,7 +75,7 @@ def build_admin_router(
             return
         repository.update_group_settings(message.chat.id, enabled=False)
         audit_service.log("group_disabled", chat_id=message.chat.id, user_id=message.from_user.id)
-        await reply(message, bot, "已禁用入群验证。")
+        await reply(message, bot, "已关闭入群验证。")
 
     @router.message(Command("set_timeout"))
     async def set_timeout(message: Message, bot: Bot) -> None:
@@ -85,7 +92,7 @@ def build_admin_router(
             user_id=message.from_user.id,
             timeout_seconds=seconds,
         )
-        await reply(message, bot, f"验证超时时间已更新为 {seconds} 秒。")
+        await reply(message, bot, f"验证超时已更新为 {seconds} 秒。")
 
     @router.message(Command("set_autodelete"))
     async def set_autodelete(message: Message, bot: Bot) -> None:
@@ -103,9 +110,9 @@ def build_admin_router(
             auto_delete_seconds=seconds,
         )
         if seconds == 0:
-            await reply(message, bot, "已关闭群内机器人消息自动删除。")
+            await reply(message, bot, "已关闭群内消息自动删除。")
         else:
-            await reply(message, bot, f"群内机器人消息将在 {seconds} 秒后自动删除。")
+            await reply(message, bot, f"群内消息将在 {seconds} 秒后自动删除。")
 
     @router.message(Command("resend"))
     async def resend(message: Message, bot: Bot) -> None:
@@ -118,12 +125,12 @@ def build_admin_router(
         assert target_user_id is not None
         challenge = verification_service.get_pending_for_group_user(message.chat.id, target_user_id)
         if not challenge:
-            await reply(message, bot, "未找到该用户的待验证任务。")
+            await reply(message, bot, "没有找到该用户的待验证任务。")
             return
         me = await bot.get_me()
         deep_link = f"https://t.me/{me.username}?start=verify_{challenge.start_token}"
         sent = await message.answer(
-            f"<a href='tg://user?id={target_user_id}'>用户</a> 请私聊机器人完成验证：{deep_link}",
+            f"<a href='tg://user?id={target_user_id}'>该用户</a> 请点击下面链接继续验证：{deep_link}",
             parse_mode="HTML",
         )
         settings = repository.ensure_group_settings(message.chat.id)
@@ -139,14 +146,16 @@ def build_admin_router(
 
     @router.message(Command("help"))
     async def help_command(message: Message, bot: Bot) -> None:
-        help_text = (
-            "/status 查看当前配置\n"
-            "/enable 启用入群验证\n"
-            "/disable 禁用入群验证\n"
-            "/set_timeout <秒> 设置验证超时\n"
-            "/set_autodelete <秒> 设置群内机器人消息自动删除，0 为关闭\n"
-            "/resend [user_id] 或回复用户消息后 /resend\n"
-            "/help 查看帮助"
+        help_text = "\n".join(
+            [
+                "/status 查看验证状态",
+                "/enable 开启验证",
+                "/disable 关闭验证",
+                "/set_timeout 设置验证超时",
+                "/set_autodelete 设置自动删消息",
+                "/resend 重新发送验证链接",
+                "/help 查看帮助",
+            ]
         )
         if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
             await reply(message, bot, help_text)
@@ -161,7 +170,7 @@ def parse_resend_target(message: Message) -> tuple[int | None, str | None]:
         return message.reply_to_message.from_user.id, None
     parts = (message.text or "").strip().split(maxsplit=1)
     if len(parts) != 2:
-        return None, "请回复目标用户消息后使用 /resend，或传入 /resend <user_id>。"
+        return None, "请回复目标用户消息后使用 /resend，或输入 /resend 用户ID。"
     try:
         return int(parts[1].strip()), None
     except ValueError:

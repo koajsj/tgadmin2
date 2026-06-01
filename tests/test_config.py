@@ -20,9 +20,11 @@ class SettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             os.environ["BOT_TOKEN"] = "123:test"
             os.environ["DB_PATH"] = str(Path(temp_dir) / "bot.sqlite3")
+            os.environ["OWNER_ID"] = "1095020773"
             os.environ["MAX_FAILED_ATTEMPTS"] = "4"
             settings = Settings.from_env()
             self.assertEqual(settings.max_failed_attempts, 4)
+            self.assertEqual(settings.owner_id, 1095020773)
 
     def test_from_env_requires_bot_token(self) -> None:
         os.environ.pop("BOT_TOKEN", None)

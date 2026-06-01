@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from bot.models import ChallengeStatus, VerificationChallenge
 from bot.storage import Repository
@@ -87,11 +87,11 @@ class VerificationService:
         if not challenge:
             return None, "验证任务不存在或已失效。"
         if challenge.user_id != user_id:
-            return None, "这个验证链接不属于你。"
+            return None, "这条验证链接不属于你。"
         if challenge.status != ChallengeStatus.PENDING:
-            return None, "该验证任务已结束。"
-        if challenge.expires_at_dt() <= datetime.now(challenge.expires_at_dt().tzinfo):
-            return None, "该验证任务已过期，请回到群里重新获取。"
+            return None, "这条验证任务已经结束。"
+        if challenge.expires_at_dt() <= datetime.now(timezone.utc):
+            return None, "这条验证任务已过期，请返回群里重新获取链接。"
         return challenge, None
 
     def validate_response(self, challenge: VerificationChallenge, response_text: str) -> bool:
@@ -117,7 +117,7 @@ class VerificationService:
 
     def get_latest_pending_for_user(self, user_id: int) -> VerificationChallenge | None:
         challenge = self._repository.get_pending_challenge_for_user(user_id)
-        if challenge and challenge.expires_at_dt() <= datetime.now(challenge.expires_at_dt().tzinfo):
+        if challenge and challenge.expires_at_dt() <= datetime.now(timezone.utc):
             return None
         return challenge
 

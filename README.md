@@ -1,65 +1,43 @@
 # Telegram 入群验证机器人
 
-这是一个可以直接部署到云服务器长期运行的 Telegram 群验证机器人。
+一个可直接部署到云服务器的 Telegram 入群验证机器人，支持群内验证、OWNER 私聊运维、群监控、用户统计、日志中心和在线更新。
 
-核心流程：
+## 核心能力
 
-- 新用户进群后先自动禁言
-- 机器人在群里发送私聊验证链接
-- 用户在私聊里完成动态文字验证
-- 验证通过后自动解除禁言
-- 超时未完成则默认踢出群
-- 连续输错超过阈值也会被移出群
+- 新成员自动限制并发送私聊验证链接
+- OWNER 私聊控制全局功能
+- `/panel 仪表盘` 查看全量运维概览
+- `/status 状态页` 查看分页系统状态
+- `/groups 群列表` 和 `/group 群详情` 查看群监控
+- `/update 更新机器人` 自动拉取代码、安装依赖、执行数据库迁移并准备重启
+- 安全审计、权限控制、数据库迁移、定时清理
 
-项目使用：
+## 环境变量
 
-- Python
-- aiogram
-- SQLite
-- systemd
-
-## 目录结构
+复制 `.env.example` 为 `.env` 后修改：
 
 ```text
-bot/
-  handlers/      群事件、私聊验证、管理命令
-  services/      验证逻辑、成员权限、超时扫描、审计
-  storage/       SQLite 读写
-  utils/         通用工具
-  config.py      配置读取
-  db.py          数据库初始化
-  main.py        启动入口
-scripts/
-  setup_debian.sh   首次部署
-  update_debian.sh  更新部署
-tests/              基础测试
+BOT_TOKEN=你的机器人 Token
+OWNER_ID=1095020773
+DB_PATH=./data/bot.sqlite3
+VERIFY_TIMEOUT_SECONDS=600
+EXPIRE_ACTION=kick
+MAX_FAILED_ATTEMPTS=3
+LOG_LEVEL=INFO
+GROUP_MESSAGE_AUTO_DELETE_SECONDS=0
+SCHEDULER_INTERVAL_SECONDS=30
+SYSTEMD_SERVICE_NAME=tgadmin2
+PM2_PROCESS_NAME=tgadmin2
+REDIS_URL=
 ```
-
-## 配置
-
-程序会自动读取项目根目录的 `.env` 文件。
-
-支持的环境变量：
-
-- `BOT_TOKEN`
-- `DB_PATH`
-- `VERIFY_TIMEOUT_SECONDS`
-- `EXPIRE_ACTION`
-- `MAX_FAILED_ATTEMPTS`
-- `LOG_LEVEL`
-- `GROUP_MESSAGE_AUTO_DELETE_SECONDS`
-- `SCHEDULER_INTERVAL_SECONDS`
 
 说明：
 
-- `GROUP_MESSAGE_AUTO_DELETE_SECONDS` 是新群的默认自动删消息时间
-- 每个群都可以再用 `/set_autodelete <seconds>` 单独覆盖
-- `MAX_FAILED_ATTEMPTS` 是单个验证任务允许的最大错误次数
-- 设为 `0` 的只有自动删除时间，失败次数最小值是 `1`
+- `OWNER_ID` 是最高权限 OWNER
+- `REDIS_URL` 可选，不配置时面板会显示“未配置”
+- `SYSTEMD_SERVICE_NAME` 和 `PM2_PROCESS_NAME` 用于 `/update` 后的重启检测
 
-示例配置见 [.env.example](/C:/Users/Administrator/Desktop/%E7%BE%A4%E7%AE%A1%E7%90%86%E6%9C%BA%E5%99%A8%E4%BA%BA/.env.example)。
-
-## 本地运行
+## 快速部署
 
 ```powershell
 copy .env.example .env
@@ -70,146 +48,118 @@ py -m pip install -r requirements.txt
 py -m bot.main
 ```
 
-## 服务器部署
+## 一键部署
 
-你只需要准备：
-
-- 一台 Debian 或 Ubuntu 服务器
-- 一个 Telegram bot token
-
-### 1. 登录服务器
-
-```bash
-ssh 用户名@服务器IP
-```
-
-### 2. 拉取代码
-
-```bash
-git clone https://github.com/koajsj/tgadmin2.git && cd tgadmin2
-```
-
-### 3. 一键部署
-
-直接执行：
+Ubuntu / Debian 推荐直接执行：
 
 ```bash
 bash scripts/setup_debian.sh
 ```
 
-脚本运行后只会让你输入一次 `BOT_TOKEN`，其他内容都会自动处理。
+脚本会：
 
-这条命令会自动完成：
-
-1. 安装 Python、git、venv
+1. 安装 `git`、`python3`、`python3-venv`
 2. 创建虚拟环境
-3. 安装依赖
-4. 自动写入 `.env`
-5. 自动创建 systemd 服务
-6. 自动启动机器人
-7. 自动设置开机自启
+3. 安装 Python 依赖
+4. 写入 `.env`
+5. 创建并启用 systemd 服务
 
-### 4. 查看运行状态
+## 云服务器部署
 
-```bash
-sudo systemctl status tgadmin2
-```
+### Ubuntu / Debian
 
-查看日志：
+推荐使用上面的 `scripts/setup_debian.sh`。
+
+如果你要手动部署：
 
 ```bash
-sudo journalctl -u tgadmin2 -f
+git clone https://github.com/koajsj/tgadmin2.git
+cd tgadmin2
+cp .env.example .env
+vim .env
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m bot.main
 ```
 
-## 以后更新
+### CentOS / Rocky / AlmaLinux
 
-服务器进入项目目录后执行：
+先安装 `git`、`python3`、`python3-venv`，再执行同样的手动部署流程。
 
-```bash
-bash scripts/update_debian.sh
-```
+如果你更偏向容器化，直接看下面的 Docker 部署。
 
-它会自动：
-
-1. 拉取最新代码
-2. 更新 Python 依赖
-3. 重启机器人服务
-
-## 机器人需要的群权限
-
-至少给这些管理员权限：
-
-- `Restrict Members`
-- `Ban Users`
-
-如果你想让机器人删除自己在群里的提示消息，再额外给：
-
-- `Delete Messages`
-
-## 管理命令
-
-这些命令只能群管理员使用：
-
-- `/status`
-- `/enable`
-- `/disable`
-- `/set_timeout <seconds>`
-- `/set_autodelete <seconds>`
-- `/resend <user_id>`
-- `/help`
-
-说明：
-
-- `/set_autodelete 0` 表示关闭群内机器人消息自动删除
-- `/set_autodelete 30` 表示机器人在群里发出的消息 30 秒后自动删除
-- `/resend` 也可以直接回复目标用户消息后使用
-
-## Docker
-
-如果你更喜欢 Docker，也可以这样启动：
+## Docker 部署
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
 
-默认仍然推荐 `scripts/setup_debian.sh`，部署更直接。
+容器部署时，`/update` 会根据运行环境自动选择可用的重启方式。
 
-## 数据库
+## OWNER 命令
 
-程序启动时会自动创建这些表：
+这些命令都要求在私聊中由 `OWNER_ID` 对应账号执行。
 
-- `group_settings`
-- `verification_challenges`
-- `audit_logs`
+- `/panel 仪表盘`：显示机器人、服务器、数据库、Redis、群和用户的综合概览
+- `/status 状态页`：分页查看服务器、机器人、验证、数据库和日志状态
+- `/groups 群列表`：分页查看群监控列表
+- `/group 群详情`：查看单个群的详细状态，参数为群 ID
+- `/update 更新机器人`：先发送一次获取确认码，再重复发送同一命令完成更新
 
-默认数据库路径：
+群内管理员命令：
 
-```text
-./data/bot.sqlite3
-```
+- `/status 查看验证状态`
+- `/enable 开启验证`
+- `/disable 关闭验证`
+- `/set_timeout 设置验证超时`
+- `/set_autodelete 设置自动删消息`
+- `/resend 重新发送验证链接`
+
+## `/update` 更新流程
+
+`/update` 会执行：
+
+1. 拉取最新 Git 代码
+2. 安装 `requirements.txt`
+3. 执行数据库迁移
+4. 检测 systemd / Docker / PM2 并准备重启
+
+使用方式：
+
+1. 在私聊里发送 `/update 更新机器人`
+2. 复制机器人返回的确认码
+3. 再发送一次 `/update <确认码>`
+
+## 数据库与维护
+
+- 程序启动时自动执行数据库迁移
+- 调度器会定时清理过期验证记录和旧审计日志
+- OWNER 面板会显示数据库健康检查结果
 
 ## 常见问题
 
-### 机器人为什么不私聊我
+### 为什么机器人不直接放行新成员？
 
-Telegram 机器人不能主动先私聊用户。你必须先点击群里的验证链接进入私聊。
+这是验证流程的默认行为。新成员先被限制，完成私聊验证后自动解除限制。
 
-### 我输入了 `/start` 但没反应
+### 为什么 `/start` 没反应？
 
-现在机器人会明确提示你：请从群里的验证链接进入。单独私聊 `/start` 不知道要验证哪个群。
+请先从群里的验证链接进入私聊，再发送 `/start`。
 
-### 为什么验证通过了还是不能发言
+### 为什么看不到 Redis 状态？
 
-通常是机器人没有足够的管理员权限，或者群本身权限设置比较特殊。先检查是否给了 `Restrict Members` 和 `Ban Users`。
+如果没有配置 `REDIS_URL`，面板会显示“未配置”。
 
-### 自动删消息为什么没生效
+## 本地运行
 
-先确认机器人有 `Delete Messages` 权限，再确认当前群没有把 `/set_autodelete` 设成 `0`。
+```bash
+python -m bot.main
+```
 
 ## 说明
 
-- 不依赖 AI
-- 不依赖第三方在线验证服务
-- 所有逻辑都在本地完成
-- 适合直接部署到 VPS 长期运行
+- 验证、统计、日志和群监控都在本地 SQLite 中完成
+- `/update` 是主要的远程运维入口
+- OWNER 无需登录服务器即可完成大部分运维操作

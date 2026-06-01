@@ -61,3 +61,133 @@ class AuditLogRecord:
     action: str
     details_json: str
     created_at: str
+
+
+@dataclass(slots=True)
+class GroupProfileRecord:
+    chat_id: int
+    title: str
+    member_count: int
+    admin_count: int
+    verification_enabled: bool
+    auto_delete_seconds: int
+    joined_at: str | None
+    last_active_at: str | None
+    risk_level: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(slots=True)
+class UserProfileRecord:
+    user_id: int
+    username: str | None
+    full_name: str
+    first_seen_at: str
+    last_seen_at: str
+    joined_at: str | None
+    banned_at: str | None
+    is_banned: bool
+    total_messages: int
+    verification_successes: int
+    verification_failures: int
+    last_verification_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(slots=True)
+class VerificationStats:
+    total: int
+    today: int
+    last_24h: int
+    last_7d: int
+    success: int
+    failure: int
+    timeout: int
+    success_rate: float
+    failure_rate: float
+    timeout_rate: float
+
+
+@dataclass(slots=True)
+class RuntimeSnapshot:
+    hostname: str
+    platform: str
+    uptime_seconds: int
+    cpu_percent: float
+    memory_total: int
+    memory_used: int
+    memory_percent: float
+    disk_total: int
+    disk_used: int
+    disk_percent: float
+    net_sent: int
+    net_recv: int
+    load_1m: float | None
+    load_5m: float | None
+    load_15m: float | None
+
+
+@dataclass(slots=True)
+class DatabaseSnapshot:
+    path: str
+    size_bytes: int
+    table_count: int
+    integrity_ok: bool
+    connection_ok: bool
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class RedisSnapshot:
+    configured: bool
+    reachable: bool
+    detail: str
+
+
+@dataclass(slots=True)
+class GitSnapshot:
+    branch: str
+    current_revision: str
+    latest_revision: str | None
+    is_dirty: bool
+
+
+@dataclass(slots=True)
+class GroupSummary:
+    chat_id: int
+    title: str
+    member_count: int
+    admin_count: int
+    verification_enabled: bool
+    auto_delete_seconds: int
+    joined_at: str | None
+    last_active_at: str | None
+    risk_level: str
+
+
+@dataclass(slots=True)
+class UserSummary:
+    user_id: int
+    username: str | None
+    full_name: str
+    total_messages: int
+    verification_successes: int
+    verification_failures: int
+    last_seen_at: str
+    joined_at: str | None
+    banned_at: str | None
+    is_banned: bool
+    active: bool
+
+
+@dataclass(slots=True)
+class UpdateResult:
+    success: bool
+    current_revision: str
+    latest_revision: str | None
+    steps: list[str]
+    output: str
+    restarted_with: str
+    error: str | None = None

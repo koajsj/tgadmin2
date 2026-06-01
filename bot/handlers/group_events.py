@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from aiogram import Bot, Router
 from aiogram.enums import ChatType
 from aiogram.types import ChatMemberUpdated, Message
@@ -11,18 +13,21 @@ from bot.services.verification import VerificationService
 from bot.storage import Repository
 from bot.utils import schedule_delete
 
+GROUP_CHAT_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+
 
 def build_group_router(
     repository: Repository,
     verification_service: VerificationService,
     membership_service: MembershipService,
     audit_service: AuditService,
+    owner_id: int,
 ) -> Router:
     router = Router(name="group-events")
 
     @router.chat_member()
-    async def on_chat_member_update(event: ChatMemberUpdated) -> None:
-        if event.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+    async def on_chat_member_update(event: ChatMemberUpdated, bot: Bot) -> None:
+        if event.chat.type not in GROUP_CHAT_TYPES:
             return
         old_status = getattr(event.old_chat_member, "status", None)
         new_status = getattr(event.new_chat_member, "status", None)
@@ -36,18 +41,41 @@ def build_group_router(
             old_status=str(old_status),
             new_status=str(new_status),
         )
+        await _refresh_group_profile(bot, repository, event.chat.id, event.chat.title)
+
+    @router.message(
+        lambda message: message.chat.type in GROUP_CHAT_TYPES
+        and bool(message.text or message.caption)
+        and not (message.text or "").startswith("/")
+    )
+    async def on_group_activity(message: Message, bot: Bot) -> None:
+        if not message.from_user or message.from_user.is_bot:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        repository.record_user_seen(
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.full_name,
+            seen_at=now,
+        )
+        repository.touch_group_profile(
+            message.chat.id,
+            title=message.chat.title or str(message.chat.id),
+            last_active_at=now,
+        )
 
     @router.message(lambda message: bool(message.new_chat_members))
     async def on_new_members(message: Message, bot: Bot) -> None:
-        if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        if message.chat.type not in GROUP_CHAT_TYPES:
             return
 
         settings = repository.ensure_group_settings(message.chat.id)
+        await _refresh_group_profile(bot, repository, message.chat.id, message.chat.title)
         if not settings.enabled:
             return
 
         for member in message.new_chat_members or []:
-            if member.is_bot:
+            if member.is_bot or member.id == owner_id:
                 continue
             if await membership_service.is_admin(bot, message.chat.id, member.id):
                 audit_service.log(
@@ -58,6 +86,8 @@ def build_group_router(
                 )
                 continue
 
+            now = datetime.now(timezone.utc).isoformat()
+            repository.record_user_seen(member.id, member.username, member.full_name, seen_at=now)
             audit_service.log(
                 "member_joined",
                 chat_id=message.chat.id,
@@ -104,3 +134,28 @@ def build_group_router(
             )
 
     return router
+
+
+async def _refresh_group_profile(bot: Bot, repository: Repository, chat_id: int, title: str | None) -> None:
+    settings = repository.ensure_group_settings(chat_id)
+    current = repository.get_group_profile(chat_id)
+    member_count = current.member_count if current else 0
+    admin_count = current.admin_count if current else 0
+    try:
+        member_count = await bot.get_chat_member_count(chat_id)
+    except Exception:
+        pass
+    try:
+        administrators = await bot.get_chat_administrators(chat_id)
+        admin_count = len(administrators)
+    except Exception:
+        pass
+    repository.touch_group_profile(
+        chat_id,
+        title=title or (current.title if current else str(chat_id)),
+        member_count=member_count,
+        admin_count=admin_count,
+        verification_enabled=settings.enabled,
+        auto_delete_seconds=settings.auto_delete_seconds,
+        last_active_at=datetime.now(timezone.utc).isoformat(),
+    )

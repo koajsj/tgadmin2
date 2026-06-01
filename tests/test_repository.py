@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from bot.db import SCHEMA_SQL
 from bot.storage import Repository
@@ -13,7 +14,7 @@ class RepositoryTests(unittest.TestCase):
         self.connection = sqlite3.connect(":memory:", check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA_SQL)
-        self.repository = Repository(self.connection, 600, "kick", 0)
+        self.repository = Repository(self.connection, Path(":memory:"), 600, "kick", 0)
 
     def tearDown(self) -> None:
         self.connection.close()

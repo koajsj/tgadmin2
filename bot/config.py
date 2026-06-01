@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class Settings:
     bot_token: str
+    owner_id: int
     db_path: Path
     verify_timeout_seconds: int = 600
     expire_action: str = "kick"
@@ -15,6 +16,9 @@ class Settings:
     log_level: str = "INFO"
     group_message_auto_delete_seconds: int = 0
     scheduler_interval_seconds: int = 30
+    systemd_service_name: str = "tgadmin2"
+    pm2_process_name: str = "tgadmin2"
+    redis_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -23,6 +27,7 @@ class Settings:
         if not bot_token:
             raise ValueError("BOT_TOKEN is required")
 
+        owner_id = _read_int("OWNER_ID", 1095020773, 1, 10**15)
         db_path = Path(os.getenv("DB_PATH", "./data/bot.sqlite3")).expanduser()
         verify_timeout_seconds = _read_int("VERIFY_TIMEOUT_SECONDS", 600, 60, 86400)
         max_failed_attempts = _read_int("MAX_FAILED_ATTEMPTS", 3, 1, 20)
@@ -33,8 +38,17 @@ class Settings:
         expire_action = os.getenv("EXPIRE_ACTION", "kick").strip().lower() or "kick"
         if expire_action not in {"kick", "restrict"}:
             raise ValueError("EXPIRE_ACTION must be 'kick' or 'restrict'")
+
+        systemd_service_name = (
+            os.getenv("SYSTEMD_SERVICE_NAME", os.getenv("SERVICE_NAME", "tgadmin2"))
+            .strip()
+            or "tgadmin2"
+        )
+        pm2_process_name = os.getenv("PM2_PROCESS_NAME", systemd_service_name).strip() or systemd_service_name
+
         return cls(
             bot_token=bot_token,
+            owner_id=owner_id,
             db_path=db_path,
             verify_timeout_seconds=verify_timeout_seconds,
             expire_action=expire_action,
@@ -42,6 +56,9 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             group_message_auto_delete_seconds=group_message_auto_delete_seconds,
             scheduler_interval_seconds=scheduler_interval_seconds,
+            systemd_service_name=systemd_service_name,
+            pm2_process_name=pm2_process_name,
+            redis_url=os.getenv("REDIS_URL", "").strip(),
         )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from bot.db import SCHEMA_SQL
 from bot.services.verification import build_challenge, normalize_response
@@ -23,7 +24,7 @@ class VerificationTests(unittest.TestCase):
         connection = sqlite3.connect(":memory:", check_same_thread=False)
         connection.row_factory = sqlite3.Row
         connection.executescript(SCHEMA_SQL)
-        repository = Repository(connection, 600, "kick", 0)
+        repository = Repository(connection, Path(":memory:"), 600, "kick", 0)
         now = datetime.now(timezone.utc) - timedelta(seconds=1)
         connection.execute(
             """

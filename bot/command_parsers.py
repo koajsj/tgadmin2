@@ -9,20 +9,20 @@ AUTO_DELETE_MAX = 86400
 def parse_timeout_command(text: str) -> tuple[int | None, str | None]:
     parts = text.strip().split(maxsplit=1)
     if len(parts) != 2:
-        return None, f"用法：/set_timeout <seconds>，范围 {TIMEOUT_MIN}-{TIMEOUT_MAX}"
+        return None, f"用法：/set_timeout 设置验证超时，范围 {TIMEOUT_MIN}-{TIMEOUT_MAX} 秒"
     try:
         seconds = int(parts[1].strip())
     except ValueError:
-        return None, "超时时间必须是整数。"
+        return None, "验证超时时间必须是整数。"
     if not TIMEOUT_MIN <= seconds <= TIMEOUT_MAX:
-        return None, f"超时时间必须在 {TIMEOUT_MIN} 到 {TIMEOUT_MAX} 秒之间。"
+        return None, f"验证超时时间必须在 {TIMEOUT_MIN} 到 {TIMEOUT_MAX} 秒之间。"
     return seconds, None
 
 
 def parse_auto_delete_command(text: str) -> tuple[int | None, str | None]:
     parts = text.strip().split(maxsplit=1)
     if len(parts) != 2:
-        return None, f"用法：/set_autodelete <seconds>，范围 {AUTO_DELETE_MIN}-{AUTO_DELETE_MAX}"
+        return None, f"用法：/set_autodelete 设置自动删消息，范围 {AUTO_DELETE_MIN}-{AUTO_DELETE_MAX} 秒"
     try:
         seconds = int(parts[1].strip())
     except ValueError:

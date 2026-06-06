@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +137,8 @@ class Repository:
         default_timeout: int,
         default_expire_action: str,
         default_auto_delete_seconds: int,
+        *,
+        initialize_schema: bool = True,
     ) -> None:
         self._connection = connection
         self._db_path = db_path
@@ -144,7 +146,8 @@ class Repository:
         self._default_timeout = default_timeout
         self._default_expire_action = default_expire_action
         self._default_auto_delete_seconds = default_auto_delete_seconds
-        self._initialize_schema()
+        if initialize_schema:
+            self._initialize_schema()
 
     def _initialize_schema(self) -> None:
         with self._lock:
@@ -262,6 +265,46 @@ class Repository:
                 (user_id,),
             ).fetchone()
             return _row_to_challenge(row) if row else None
+
+    def count_pending_challenges_for_user(self, user_id: int) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM verification_challenges
+                WHERE user_id = ? AND status = 'pending'
+                """,
+                (user_id,),
+            ).fetchone()
+            return int(row["count"])
+
+    def set_active_private_challenge(self, user_id: int, challenge_id: int) -> None:
+        self.set_app_setting(f"active_private_challenge:{user_id}", str(challenge_id))
+
+    def clear_active_private_challenge(self, user_id: int) -> None:
+        self.delete_app_setting(f"active_private_challenge:{user_id}")
+
+    def get_active_private_challenge_for_user(self, user_id: int) -> VerificationChallenge | None:
+        raw = self.get_app_setting(f"active_private_challenge:{user_id}")
+        if not raw:
+            return None
+        try:
+            challenge_id = int(raw)
+        except ValueError:
+            self.clear_active_private_challenge(user_id)
+            return None
+        try:
+            challenge = self.get_challenge_by_id(challenge_id)
+        except KeyError:
+            self.clear_active_private_challenge(user_id)
+            return None
+        if challenge.user_id != user_id:
+            self.clear_active_private_challenge(user_id)
+            return None
+        if challenge.status != "pending" or challenge.expires_at_dt() <= utc_now():
+            self.clear_active_private_challenge(user_id)
+            return None
+        return challenge
 
     def create_challenge(
         self,
@@ -777,9 +820,19 @@ class Repository:
             self._connection.commit()
             return self.get_user_profile(user_id)
 
-    def record_user_seen(self, user_id: int, username: str | None, full_name: str, *, seen_at: str | None = None) -> UserProfileRecord:
+    def record_user_seen(
+        self,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        *,
+        seen_at: str | None = None,
+        count_message: bool = False,
+    ) -> UserProfileRecord:
         current = self.get_user_profile(user_id)
-        total_messages = (current.total_messages + 1) if current else 1
+        total_messages = current.total_messages if current else 0
+        if count_message:
+            total_messages += 1
         return self.upsert_user_profile(
             user_id=user_id,
             username=username,
@@ -920,7 +973,11 @@ class Repository:
         total = self._scalar(
             "SELECT COUNT(*) FROM verification_challenges"
         )
-        today_since = date.today().isoformat()
+        today_since = datetime.combine(
+            utc_now().date(),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        ).isoformat()
         last_24h_since = (utc_now() - timedelta(days=1)).isoformat()
         last_7d_since = (utc_now() - timedelta(days=7)).isoformat()
         success = self._scalar("SELECT COUNT(*) FROM verification_challenges WHERE status = 'passed'")
@@ -973,6 +1030,11 @@ class Repository:
                 """,
                 (key, value, now),
             )
+            self._connection.commit()
+
+    def delete_app_setting(self, key: str) -> None:
+        with self._lock:
+            self._connection.execute("DELETE FROM app_settings WHERE key = ?", (key,))
             self._connection.commit()
 
     def get_bool_setting(self, key: str, default: bool = False) -> bool:

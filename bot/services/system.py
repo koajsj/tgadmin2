@@ -20,6 +20,8 @@ class SystemInspector:
         self._repo_root = repo_root
         self._repository = repository
         self._redis_url = redis_url
+        self._remote_revision_ttl_seconds = 60.0
+        self._remote_revision_cache: dict[str, tuple[float, str | None]] = {}
 
     def runtime_snapshot(self) -> RuntimeSnapshot:
         memory = psutil.virtual_memory()
@@ -72,11 +74,11 @@ class SystemInspector:
         except Exception as exc:  # pragma: no cover - defensive runtime probe
             return RedisSnapshot(configured=True, reachable=False, detail=str(exc))
 
-    def git_snapshot(self) -> GitSnapshot:
+    def git_snapshot(self, *, fresh_remote: bool = False) -> GitSnapshot:
         branch = self._run_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown"
         current_revision = self._run_git("rev-parse", "HEAD") or "unknown"
         is_dirty = bool(self._run_git("status", "--porcelain"))
-        latest_revision = self._remote_revision(branch)
+        latest_revision = self._remote_revision(branch, refresh=fresh_remote)
         return self._repository.build_git_snapshot(
             branch=branch,
             current_revision=current_revision,
@@ -84,11 +86,15 @@ class SystemInspector:
             is_dirty=is_dirty,
         )
 
-    def _remote_revision(self, branch: str) -> str | None:
+    def _remote_revision(self, branch: str, *, refresh: bool = False) -> str | None:
+        if not refresh:
+            cached = self._remote_revision_cache.get(branch)
+            if cached and (time.monotonic() - cached[0]) < self._remote_revision_ttl_seconds:
+                return cached[1]
         remote = self._run_git("ls-remote", "origin", f"refs/heads/{branch}")
-        if not remote:
-            return None
-        return remote.split()[0]
+        latest_revision = remote.split()[0] if remote else None
+        self._remote_revision_cache[branch] = (time.monotonic(), latest_revision)
+        return latest_revision
 
     def _run_git(self, *args: str) -> str | None:
         git = shutil.which("git")

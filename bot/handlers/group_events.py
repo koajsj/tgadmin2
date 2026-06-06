@@ -57,6 +57,7 @@ def build_group_router(
             message.from_user.username,
             message.from_user.full_name,
             seen_at=now,
+            count_message=True,
         )
         repository.touch_group_profile(
             message.chat.id,

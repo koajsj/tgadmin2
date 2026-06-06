@@ -4,7 +4,9 @@ import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+import bot.storage.repository as repository_module
 from bot.db import SCHEMA_SQL
 from bot.storage import Repository
 
@@ -121,3 +123,102 @@ class RepositoryTests(unittest.TestCase):
         challenge = self.repository.get_pending_challenge_for_user(9)
         self.assertIsNotNone(challenge)
         self.assertEqual(challenge.start_token, "newer-token")
+
+    def test_active_private_challenge_stays_bound_to_selected_task(self) -> None:
+        first = self.repository.create_challenge(
+            chat_id=1,
+            user_id=7,
+            user_chat_instance=None,
+            join_message_id=10,
+            start_token="token-a",
+            challenge_text="river 42 maple",
+            expected_response="MAPLE-42-RIVER",
+            timeout_seconds=600,
+        )
+        second = self.repository.create_challenge(
+            chat_id=2,
+            user_id=7,
+            user_chat_instance=None,
+            join_message_id=11,
+            start_token="token-b",
+            challenge_text="ember 33 pine",
+            expected_response="PINE-33-EMBER",
+            timeout_seconds=600,
+        )
+
+        self.repository.set_active_private_challenge(7, first.id)
+
+        active = self.repository.get_active_private_challenge_for_user(7)
+        self.assertIsNotNone(active)
+        assert active is not None
+        self.assertEqual(active.id, first.id)
+        self.assertEqual(self.repository.count_pending_challenges_for_user(7), 2)
+        self.assertEqual(second.user_id, 7)
+
+    def test_record_user_seen_only_counts_group_messages_when_requested(self) -> None:
+        profile = self.repository.record_user_seen(88, "alice", "Alice", seen_at="2026-06-06T08:00:00+00:00")
+        self.assertEqual(profile.total_messages, 0)
+
+        profile = self.repository.record_user_seen(
+            88,
+            "alice",
+            "Alice",
+            seen_at="2026-06-06T08:01:00+00:00",
+            count_message=True,
+        )
+        self.assertEqual(profile.total_messages, 1)
+
+        profile = self.repository.record_user_seen(88, "alice", "Alice", seen_at="2026-06-06T08:02:00+00:00")
+        self.assertEqual(profile.total_messages, 1)
+
+    def test_get_verification_stats_uses_utc_day_boundary(self) -> None:
+        fixed_now = datetime(2026, 6, 6, 12, 0, tzinfo=timezone.utc)
+        self.connection.execute(
+            """
+            INSERT INTO verification_challenges (
+                chat_id, user_id, user_chat_instance, join_message_id, prompt_message_id,
+                status, start_token, challenge_text, expected_response, attempt_count,
+                expires_at, passed_at, invalidated_at, created_at, updated_at
+            ) VALUES (?, ?, NULL, NULL, NULL, 'passed', ?, ?, ?, 0, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                101,
+                "today-token",
+                "river 42 maple",
+                "MAPLE-42-RIVER",
+                (fixed_now + timedelta(minutes=10)).isoformat(),
+                "2026-06-06T00:05:00+00:00",
+                "2026-06-06T00:05:00+00:00",
+                "2026-06-06T00:00:30+00:00",
+                "2026-06-06T00:05:00+00:00",
+            ),
+        )
+        self.connection.execute(
+            """
+            INSERT INTO verification_challenges (
+                chat_id, user_id, user_chat_instance, join_message_id, prompt_message_id,
+                status, start_token, challenge_text, expected_response, attempt_count,
+                expires_at, passed_at, invalidated_at, created_at, updated_at
+            ) VALUES (?, ?, NULL, NULL, NULL, 'passed', ?, ?, ?, 0, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                102,
+                "yesterday-token",
+                "ember 33 pine",
+                "PINE-33-EMBER",
+                fixed_now.isoformat(),
+                "2026-06-05T23:59:59+00:00",
+                "2026-06-05T23:59:59+00:00",
+                "2026-06-05T23:50:00+00:00",
+                "2026-06-05T23:59:59+00:00",
+            ),
+        )
+        self.connection.commit()
+
+        with patch.object(repository_module, "utc_now", return_value=fixed_now):
+            stats = self.repository.get_verification_stats()
+
+        self.assertEqual(stats.total, 2)
+        self.assertEqual(stats.today, 1)

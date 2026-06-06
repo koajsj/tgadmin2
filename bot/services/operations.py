@@ -26,7 +26,7 @@ class UpdateService:
     async def run_update(self, db_path: Path) -> UpdateResult:
         steps: list[str] = []
         output_chunks: list[str] = []
-        current_snapshot = self._inspector.git_snapshot()
+        current_snapshot = self._inspector.git_snapshot(fresh_remote=True)
         if current_snapshot.is_dirty:
             return UpdateResult(
                 success=False,
@@ -38,6 +38,8 @@ class UpdateService:
                 error="working tree has local changes",
             )
 
+        code_changed = False
+        irreversible_changes_possible = False
         try:
             steps.append("fetching latest code")
             fetch = await self._run_git("fetch", "origin", "--prune")
@@ -48,7 +50,9 @@ class UpdateService:
             pull = await self._run_git("pull", "--ff-only")
             output_chunks.append(self._format_output("git pull", pull))
             self._raise_for_failure(pull, "git pull failed")
+            code_changed = True
 
+            irreversible_changes_possible = True
             steps.append("installing dependencies")
             pip = await self._run_python(
                 sys.executable,
@@ -76,7 +80,7 @@ class UpdateService:
             restart_method = self._detect_restart_method()
             steps.append(f"restart plan: {restart_method}")
 
-            latest_snapshot = self._inspector.git_snapshot()
+            latest_snapshot = self._inspector.git_snapshot(fresh_remote=True)
             return UpdateResult(
                 success=True,
                 current_revision=latest_snapshot.current_revision,
@@ -86,15 +90,25 @@ class UpdateService:
                 restarted_with=restart_method,
             )
         except Exception as exc:
-            await self._restore_revision(current_snapshot.current_revision)
+            rollback_note = "none"
+            if code_changed and not irreversible_changes_possible:
+                restored = await self._restore_revision(current_snapshot.current_revision)
+                rollback_note = "restored previous revision" if restored else "restore failed"
+                steps.append(f"rollback: {rollback_note}")
+            elif code_changed:
+                rollback_note = "skipped after dependency/database phase"
+                steps.append(
+                    "rollback skipped: dependency or database changes may already have been applied"
+                )
+            failure_snapshot = self._inspector.git_snapshot()
             return UpdateResult(
                 success=False,
-                current_revision=current_snapshot.current_revision,
-                latest_revision=current_snapshot.latest_revision,
+                current_revision=failure_snapshot.current_revision,
+                latest_revision=failure_snapshot.latest_revision,
                 steps=steps,
                 output="\n".join(output_chunks).strip(),
                 restarted_with="none",
-                error=str(exc),
+                error=self._format_failure_error(str(exc), rollback_note),
             )
 
     async def restart_runtime(self) -> str:
@@ -156,11 +170,22 @@ class UpdateService:
     def _git_binary(self) -> str:
         return shutil.which("git") or "git"
 
-    async def _restore_revision(self, revision: str) -> None:
+    async def _restore_revision(self, revision: str) -> bool:
         try:
-            await self._run_git("reset", "--hard", revision)
+            result = await self._run_git("reset", "--hard", revision)
         except Exception:
-            return
+            return False
+        return result.returncode == 0
+
+    def _format_failure_error(self, message: str, rollback_note: str) -> str:
+        if rollback_note == "skipped after dependency/database phase":
+            return (
+                f"{message}. Manual recovery may be required because dependency "
+                "or database changes may already have been applied."
+            )
+        if rollback_note == "restore failed":
+            return f"{message}. Automatic code rollback also failed."
+        return message
 
     def _detect_restart_method(self) -> str:
         if self._is_systemd() and self._settings.systemd_service_name:

@@ -34,6 +34,7 @@ def build_private_router(
             return
         assert challenge is not None
         verification_service.set_user_chat_instance(challenge.id, str(message.chat.id))
+        repository.set_active_private_challenge(message.from_user.id, challenge.id)
         repository.record_user_seen(
             message.from_user.id,
             message.from_user.username,
@@ -71,7 +72,11 @@ def build_private_router(
             message.from_user.full_name,
             seen_at=datetime.now(timezone.utc).isoformat(),
         )
-        challenge = verification_service.get_latest_pending_for_user(message.from_user.id)
+        challenge = repository.get_active_private_challenge_for_user(message.from_user.id)
+        if not challenge and repository.count_pending_challenges_for_user(message.from_user.id) == 1:
+            challenge = verification_service.get_latest_pending_for_user(message.from_user.id)
+            if challenge:
+                repository.set_active_private_challenge(message.from_user.id, challenge.id)
         if not challenge:
             await message.answer("当前没有待完成的验证任务，请返回群里重新获取链接。")
             return
@@ -115,6 +120,7 @@ def build_private_router(
                 challenge_id=challenge.id,
             )
             await message.answer("验证通过，已自动解除群内限制。")
+            repository.clear_active_private_challenge(message.from_user.id)
             group_notice = await bot.send_message(
                 challenge.chat_id,
                 f"<a href='tg://user?id={challenge.user_id}'>该用户</a> 验证通过，已恢复发言。",
@@ -141,6 +147,7 @@ def build_private_router(
         )
         if attempts >= max_failed_attempts:
             verification_service.mark_failed(challenge.id)
+            repository.clear_active_private_challenge(message.from_user.id)
             result = await membership_service.kick_member(bot, challenge.chat_id, challenge.user_id)
             audit_service.log(
                 "challenge_failed_locked",

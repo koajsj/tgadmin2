@@ -36,6 +36,7 @@ async def run() -> None:
         settings.verify_timeout_seconds,
         settings.expire_action,
         settings.group_message_auto_delete_seconds,
+        initialize_schema=False,
     )
     audit_service = AuditService(repository)
     verification_service = VerificationService(repository)

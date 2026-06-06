@@ -13,6 +13,7 @@ from bot.services.verification import VerificationService
 from bot.storage import Repository
 
 LOGGER = logging.getLogger(__name__)
+EXPIRED_CHALLENGE_CONCURRENCY = 10
 
 
 class SchedulerService:
@@ -61,7 +62,19 @@ class SchedulerService:
 
     async def _scan_once(self) -> None:
         expired_items = self._repository.list_expired_pending_challenges()
-        for challenge in expired_items:
+        if not expired_items:
+            return
+        semaphore = asyncio.Semaphore(EXPIRED_CHALLENGE_CONCURRENCY)
+        await asyncio.gather(
+            *(self._handle_expired_challenge(semaphore, challenge) for challenge in expired_items)
+        )
+
+    async def _handle_expired_challenge(
+        self,
+        semaphore: asyncio.Semaphore,
+        challenge,
+    ) -> None:
+        async with semaphore:
             settings = self._repository.ensure_group_settings(challenge.chat_id)
             if settings.expire_action == "kick":
                 result = await self._membership_service.kick_member(
@@ -84,14 +97,14 @@ class SchedulerService:
                         fallback="restricted",
                         error=result.detail,
                     )
-            else:
-                self._verification_service.mark_expired(challenge.id)
-                self._audit_service.log(
-                    "expired_restricted",
-                    chat_id=challenge.chat_id,
-                    user_id=challenge.user_id,
-                    challenge_id=challenge.id,
-                )
+                return
+            self._verification_service.mark_expired(challenge.id)
+            self._audit_service.log(
+                "expired_restricted",
+                chat_id=challenge.chat_id,
+                user_id=challenge.user_id,
+                challenge_id=challenge.id,
+            )
 
     async def _run_maintenance_if_due(self) -> None:
         today = _today_key()

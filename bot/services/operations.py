@@ -50,21 +50,36 @@ class UpdateService:
             pull = await self._run_git("pull", "--ff-only")
             output_chunks.append(self._format_output("git pull", pull))
             self._raise_for_failure(pull, "git pull failed")
-            code_changed = True
+            post_pull_snapshot = self._inspector.git_snapshot()
+            code_changed = post_pull_snapshot.current_revision != current_snapshot.current_revision
+            if not code_changed:
+                steps.append("already up to date")
+                return UpdateResult(
+                    success=True,
+                    current_revision=post_pull_snapshot.current_revision,
+                    latest_revision=post_pull_snapshot.latest_revision,
+                    steps=steps,
+                    output="\n".join(output_chunks).strip(),
+                    restarted_with="none",
+                )
+
+            if await self._requirements_changed(current_snapshot.current_revision):
+                irreversible_changes_possible = True
+                steps.append("installing dependencies")
+                pip = await self._run_python(
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    str(self._repo_root / "requirements.txt"),
+                )
+                output_chunks.append(self._format_output("pip install", pip))
+                self._raise_for_failure(pip, "dependency installation failed")
+            else:
+                steps.append("dependencies unchanged")
 
             irreversible_changes_possible = True
-            steps.append("installing dependencies")
-            pip = await self._run_python(
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-r",
-                str(self._repo_root / "requirements.txt"),
-            )
-            output_chunks.append(self._format_output("pip install", pip))
-            self._raise_for_failure(pip, "dependency installation failed")
-
             steps.append("running database migration")
             migrate = await self._run_python(
                 sys.executable,
@@ -127,12 +142,6 @@ class UpdateService:
                 )
                 self._raise_for_failure(result, "docker compose restart failed")
             return restart_method
-        if restart_method.startswith("pm2:"):
-            pm2 = shutil.which("pm2")
-            if pm2 and self._settings.pm2_process_name:
-                result = await self._run_command(pm2, "restart", self._settings.pm2_process_name)
-                self._raise_for_failure(result, "pm2 restart failed")
-            return restart_method
         return restart_method
 
     async def _run_git(self, *args: str) -> CommandOutput:
@@ -192,9 +201,12 @@ class UpdateService:
             return f"systemd:{self._settings.systemd_service_name}"
         if self._has_docker_compose():
             return "docker-compose"
-        if shutil.which("pm2") and self._settings.pm2_process_name:
-            return f"pm2:{self._settings.pm2_process_name}"
         return "manual"
+
+    async def _requirements_changed(self, previous_revision: str) -> bool:
+        diff = await self._run_git("diff", "--name-only", previous_revision, "HEAD", "--", "requirements.txt")
+        self._raise_for_failure(diff, "requirements diff check failed")
+        return bool(diff.stdout.strip())
 
     def _is_systemd(self) -> bool:
         return Path("/run/systemd/system").exists() and shutil.which("systemctl") is not None

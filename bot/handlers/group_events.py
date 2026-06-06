@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import ChatMemberUpdated, Message
 from aiogram.utils.deep_linking import create_start_link
 
@@ -14,6 +16,7 @@ from bot.storage import Repository
 from bot.utils import schedule_delete
 
 GROUP_CHAT_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+LOGGER = logging.getLogger(__name__)
 
 
 def build_group_router(
@@ -144,13 +147,17 @@ async def _refresh_group_profile(bot: Bot, repository: Repository, chat_id: int,
     admin_count = current.admin_count if current else 0
     try:
         member_count = await bot.get_chat_member_count(chat_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        LOGGER.warning("group member count refresh failed chat_id=%s error=%s", chat_id, exc)
     except Exception:
-        pass
+        LOGGER.exception("unexpected group member count refresh failure chat_id=%s", chat_id)
     try:
         administrators = await bot.get_chat_administrators(chat_id)
         admin_count = len(administrators)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        LOGGER.warning("group admin refresh failed chat_id=%s error=%s", chat_id, exc)
     except Exception:
-        pass
+        LOGGER.exception("unexpected group admin refresh failure chat_id=%s", chat_id)
     repository.touch_group_profile(
         chat_id,
         title=title or (current.title if current else str(chat_id)),

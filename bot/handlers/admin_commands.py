@@ -4,13 +4,13 @@ import math
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.command_parsers import parse_auto_delete_command, parse_timeout_command
 from bot.services.audit import AuditService
-from bot.services.membership import MembershipService
 from bot.services.verification import VerificationService
 from bot.storage import Repository
 from bot.utils import schedule_delete
@@ -21,7 +21,6 @@ GROUP_PAGE_SIZE = 5
 def build_admin_router(
     repository: Repository,
     verification_service: VerificationService,
-    membership_service: MembershipService,
     audit_service: AuditService,
     owner_id: int,
     max_failed_attempts: int,
@@ -36,15 +35,13 @@ def build_admin_router(
 
     async def ensure_owner(message: Message, bot: Bot) -> bool:
         if not message.from_user or message.from_user.id != owner_id:
-            await reply(message, bot, "这个机器人只给 OWNER 使用。")
+            await reply(message, bot, "这个机器人只允许 OWNER 使用。")
             return False
         return True
 
     def resolve_target_chat_id(message: Message) -> int | None:
         if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
             return message.chat.id
-        if not message.from_user or message.from_user.id != owner_id:
-            return None
         return None
 
     def parse_group_command_args(text: str) -> tuple[int | None, str]:
@@ -67,7 +64,7 @@ def build_admin_router(
         groups = repository.list_groups(limit=GROUP_PAGE_SIZE, offset=offset)
         lines = [
             "<b>选择要操作的群</b>",
-            "点下面的按钮选群。",
+            "点击下面的按钮选群。",
         ]
         if not groups:
             lines.append("当前还没有任何已记录的群。")
@@ -78,12 +75,18 @@ def build_admin_router(
                 text=label[:18],
                 callback_data=f"grpact:{action}:{page}:{group.chat_id}:{value or '-'}",
             )
-            lines.append(f"• {label} (<code>{group.chat_id}</code>)")
+            lines.append(f"- {label} (<code>{group.chat_id}</code>)")
         if page > 1:
-            builder.button(text="上一页", callback_data=f"grpnav:{action}:{page - 1}:{value or '-'}")
+            builder.button(
+                text="上一页",
+                callback_data=f"grpnav:{action}:{page - 1}:{value or '-'}",
+            )
         builder.button(text=f"第 {page}/{total_pages} 页", callback_data="noop")
         if page < total_pages:
-            builder.button(text="下一页", callback_data=f"grpnav:{action}:{page + 1}:{value or '-'}")
+            builder.button(
+                text="下一页",
+                callback_data=f"grpnav:{action}:{page + 1}:{value or '-'}",
+            )
         builder.adjust(1)
         return "\n".join(lines), builder.as_markup()
 
@@ -118,13 +121,21 @@ def build_admin_router(
 
         if action == "enable":
             settings = repository.update_group_settings(chat_id, enabled=True)
-            audit_service.log("group_enabled", chat_id=chat_id, user_id=message.from_user.id if message.from_user else None)
+            audit_service.log(
+                "group_enabled",
+                chat_id=chat_id,
+                user_id=message.from_user.id if message.from_user else None,
+            )
             await reply(message, bot, f"已开启入群验证，超时 {settings.timeout_seconds} 秒。")
             return
 
         if action == "disable":
             repository.update_group_settings(chat_id, enabled=False)
-            audit_service.log("group_disabled", chat_id=chat_id, user_id=message.from_user.id if message.from_user else None)
+            audit_service.log(
+                "group_disabled",
+                chat_id=chat_id,
+                user_id=message.from_user.id if message.from_user else None,
+            )
             await reply(message, bot, "已关闭入群验证。")
             return
 
@@ -163,7 +174,7 @@ def build_admin_router(
 
         if action == "resend":
             if not value:
-                await reply(message, bot, "请先指定要重新发送链接的用户ID。")
+                await reply(message, bot, "请先指定要重新发送链接的用户 ID。")
                 return
             try:
                 target_user_id = int(value)
@@ -177,7 +188,10 @@ def build_admin_router(
             me = await bot.get_me()
             deep_link = f"https://t.me/{me.username}?start=verify_{challenge.start_token}"
             sent = await message.answer(
-                f"<a href='tg://user?id={target_user_id}'>该用户</a> 请点击下面链接继续验证：{deep_link}",
+                (
+                    f"<a href='tg://user?id={target_user_id}'>该用户</a> "
+                    f"请点击下面链接继续验证：{deep_link}"
+                ),
                 parse_mode="HTML",
             )
             settings = repository.ensure_group_settings(chat_id)
@@ -190,13 +204,12 @@ def build_admin_router(
                 challenge_id=challenge.id,
                 admin_user_id=message.from_user.id if message.from_user else None,
             )
-            return
 
     @router.message(Command("status"))
     async def status(message: Message, bot: Bot) -> None:
         if not await ensure_owner(message, bot):
             return
-        chat_id, rest = parse_group_command_args(message.text or "")
+        chat_id, _rest = parse_group_command_args(message.text or "")
         if message.chat.type == ChatType.PRIVATE and chat_id is None:
             await ask_group_selection(message, "status")
             return
@@ -211,7 +224,7 @@ def build_admin_router(
     async def enable(message: Message, bot: Bot) -> None:
         if not await ensure_owner(message, bot):
             return
-        chat_id, _ = parse_group_command_args(message.text or "")
+        chat_id, _rest = parse_group_command_args(message.text or "")
         if message.chat.type == ChatType.PRIVATE and chat_id is None:
             await ask_group_selection(message, "enable")
             return
@@ -226,7 +239,7 @@ def build_admin_router(
     async def disable(message: Message, bot: Bot) -> None:
         if not await ensure_owner(message, bot):
             return
-        chat_id, _ = parse_group_command_args(message.text or "")
+        chat_id, _rest = parse_group_command_args(message.text or "")
         if message.chat.type == ChatType.PRIVATE and chat_id is None:
             await ask_group_selection(message, "disable")
             return
@@ -310,11 +323,11 @@ def build_admin_router(
                 "/enable 开启验证",
                 "/disable 关闭验证",
                 "/set_timeout 设置验证超时",
-                "/set_autodelete 设置自动删消息",
+                "/set_autodelete 设置自动删除消息",
                 "/resend 重新发送验证链接",
                 "/help 查看帮助",
                 "",
-                "私聊里不用写群ID，直接发命令后选群就行。",
+                "私聊里不用写群 ID，直接发命令后选群即可。",
             ]
         )
         await message.answer(help_text)
@@ -333,7 +346,7 @@ def build_admin_router(
         text, markup = build_group_picker(action, value if value != "-" else "", page)
         try:
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
+        except TelegramBadRequest:
             pass
         await callback.answer()
 
@@ -349,28 +362,15 @@ def build_admin_router(
             await callback.answer("参数错误", show_alert=True)
             return
         await callback.answer()
-        await execute_action(callback.message, callback.message.bot, action, chat_id, value if value != "-" else "")
+        await execute_action(
+            callback.message,
+            callback.message.bot,
+            action,
+            chat_id,
+            value if value != "-" else "",
+        )
 
     return router
-
-
-def parse_resend_target(message: Message) -> tuple[int | None, str | None]:
-    if message.reply_to_message and message.reply_to_message.from_user:
-        return message.reply_to_message.from_user.id, None
-    parts = _command_args(message.text or "").split(maxsplit=1)
-    if len(parts) != 1:
-        return None, "请回复目标用户消息后使用 /resend，或者直接写 /resend 用户ID。"
-    try:
-        return int(parts[0].strip()), None
-    except ValueError:
-        return None, "user_id 必须是整数。"
-
-
-def _strip_command_name(text: str) -> str:
-    parts = text.strip().split(maxsplit=1)
-    if len(parts) == 1:
-        return ""
-    return parts[1].strip()
 
 
 def _command_args(text: str) -> str:

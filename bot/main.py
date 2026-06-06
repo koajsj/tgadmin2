@@ -74,7 +74,6 @@ async def run() -> None:
         build_admin_router(
             repository,
             verification_service,
-            membership_service,
             audit_service,
             settings.owner_id,
             settings.max_failed_attempts,

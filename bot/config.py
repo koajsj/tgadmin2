@@ -17,7 +17,6 @@ class Settings:
     group_message_auto_delete_seconds: int = 0
     scheduler_interval_seconds: int = 30
     systemd_service_name: str = "tgadmin2"
-    pm2_process_name: str = "tgadmin2"
     redis_url: str = ""
 
     @classmethod
@@ -44,7 +43,6 @@ class Settings:
             .strip()
             or "tgadmin2"
         )
-        pm2_process_name = os.getenv("PM2_PROCESS_NAME", systemd_service_name).strip() or systemd_service_name
 
         return cls(
             bot_token=bot_token,
@@ -57,7 +55,6 @@ class Settings:
             group_message_auto_delete_seconds=group_message_auto_delete_seconds,
             scheduler_interval_seconds=scheduler_interval_seconds,
             systemd_service_name=systemd_service_name,
-            pm2_process_name=pm2_process_name,
             redis_url=os.getenv("REDIS_URL", "").strip(),
         )
 

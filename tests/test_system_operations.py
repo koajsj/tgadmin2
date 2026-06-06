@@ -85,6 +85,8 @@ class RecordingUpdateService(UpdateService):
             return CommandOutput(0, "", "")
         if args[0] == "pull":
             return CommandOutput(0, "", "")
+        if args[0] == "diff":
+            return CommandOutput(0, "requirements.txt", "")
         if args[0] == "reset":
             return CommandOutput(0, "", "")
         raise AssertionError(f"unexpected git command: {args}")

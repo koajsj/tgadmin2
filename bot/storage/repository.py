@@ -15,6 +15,7 @@ from bot.models import (
     GroupProfileRecord,
     GroupSettingsRecord,
     GroupSummary,
+    OwnerDashboardSummary,
     RuntimeSnapshot,
     UserProfileRecord,
     UserSummary,
@@ -248,9 +249,11 @@ class Repository:
                     gs.updated_at,
                     gp.title,
                     gp.last_active_at,
-                    gp.chat_id AS profile_chat_id
+                    gp.chat_id AS profile_chat_id,
+                    alias.value AS alias
                 FROM group_settings gs
                 LEFT JOIN group_profiles gp ON gp.chat_id = gs.chat_id
+                LEFT JOIN app_settings alias ON alias.key = ('group_alias:' || gs.chat_id)
                 ORDER BY COALESCE(gp.last_active_at, gs.updated_at) DESC, gs.chat_id DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -271,9 +274,11 @@ class Repository:
                     gs.updated_at,
                     gp.title,
                     gp.last_active_at,
-                    gp.chat_id AS profile_chat_id
+                    gp.chat_id AS profile_chat_id,
+                    alias.value AS alias
                 FROM group_settings gs
                 LEFT JOIN group_profiles gp ON gp.chat_id = gs.chat_id
+                LEFT JOIN app_settings alias ON alias.key = ('group_alias:' || gs.chat_id)
                 WHERE gs.chat_id = ?
                 """,
                 (chat_id,),
@@ -630,10 +635,12 @@ class Repository:
         joined_at: str | None = None,
         last_active_at: str | None = None,
         risk_level: str | None = None,
+        existing: GroupProfileRecord | None = None,
     ) -> GroupProfileRecord:
         now = utc_now().isoformat()
         with self._lock:
-            existing = self.get_group_profile(chat_id)
+            if existing is None:
+                existing = self.get_group_profile(chat_id)
             created_at = existing.created_at if existing else now
             joined_value = joined_at if joined_at is not None else (existing.joined_at if existing else now)
             last_active_value = last_active_at if last_active_at is not None else (existing.last_active_at if existing else now)
@@ -716,6 +723,7 @@ class Repository:
             joined_at=joined_value,
             last_active_at=last_active_at or utc_now().isoformat(),
             risk_level=risk_level,
+            existing=current,
         )
 
     def get_group_profile(self, chat_id: int) -> GroupProfileRecord | None:
@@ -730,30 +738,20 @@ class Repository:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT gp.*, gs.enabled AS settings_enabled, gs.auto_delete_seconds AS settings_auto_delete
+                SELECT
+                    gp.*,
+                    gs.enabled AS settings_enabled,
+                    gs.auto_delete_seconds AS settings_auto_delete,
+                    alias.value AS alias
                 FROM group_profiles gp
                 LEFT JOIN group_settings gs ON gs.chat_id = gp.chat_id
+                LEFT JOIN app_settings alias ON alias.key = ('group_alias:' || gp.chat_id)
                 ORDER BY COALESCE(gp.last_active_at, gp.created_at) DESC, gp.chat_id DESC
                 LIMIT ? OFFSET ?
                 """,
                 (limit, offset),
             ).fetchall()
-            summaries: list[GroupSummary] = []
-            for row in rows:
-                summaries.append(
-                    GroupSummary(
-                        chat_id=int(row["chat_id"]),
-                        title=str(row["title"]),
-                        member_count=int(row["member_count"]),
-                        admin_count=int(row["admin_count"]),
-                        verification_enabled=bool(row["settings_enabled"] if row["settings_enabled"] is not None else row["verification_enabled"]),
-                        auto_delete_seconds=int(row["settings_auto_delete"] if row["settings_auto_delete"] is not None else row["auto_delete_seconds"]),
-                        joined_at=row["joined_at"],
-                        last_active_at=row["last_active_at"],
-                        risk_level=str(row["risk_level"]),
-                    )
-                )
-            return summaries
+            return [_row_to_group_summary(row) for row in rows]
 
     def count_groups(self) -> int:
         with self._lock:
@@ -784,26 +782,21 @@ class Repository:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT gp.*, gs.enabled AS settings_enabled, gs.auto_delete_seconds AS settings_auto_delete
+                SELECT
+                    gp.*,
+                    gs.enabled AS settings_enabled,
+                    gs.auto_delete_seconds AS settings_auto_delete,
+                    alias.value AS alias
                 FROM group_profiles gp
                 LEFT JOIN group_settings gs ON gs.chat_id = gp.chat_id
+                LEFT JOIN app_settings alias ON alias.key = ('group_alias:' || gp.chat_id)
                 WHERE gp.chat_id = ?
                 """,
                 (chat_id,),
             ).fetchone()
             if not row:
                 return None
-            return GroupSummary(
-                chat_id=int(row["chat_id"]),
-                title=str(row["title"]),
-                member_count=int(row["member_count"]),
-                admin_count=int(row["admin_count"]),
-                verification_enabled=bool(row["settings_enabled"] if row["settings_enabled"] is not None else row["verification_enabled"]),
-                auto_delete_seconds=int(row["settings_auto_delete"] if row["settings_auto_delete"] is not None else row["auto_delete_seconds"]),
-                joined_at=row["joined_at"],
-                last_active_at=row["last_active_at"],
-                risk_level=str(row["risk_level"]),
-            )
+            return _row_to_group_summary(row)
 
     def upsert_user_profile(
         self,
@@ -1038,31 +1031,36 @@ class Repository:
             return int(row["total"])
 
     def get_verification_stats(self) -> VerificationStats:
-        total = self._scalar(
-            "SELECT COUNT(*) FROM verification_challenges"
-        )
+        now = utc_now()
         today_since = datetime.combine(
-            utc_now().date(),
+            now.date(),
             datetime.min.time(),
             tzinfo=timezone.utc,
         ).isoformat()
-        last_24h_since = (utc_now() - timedelta(days=1)).isoformat()
-        last_7d_since = (utc_now() - timedelta(days=7)).isoformat()
-        success = self._scalar("SELECT COUNT(*) FROM verification_challenges WHERE status = 'passed'")
-        failure = self._scalar("SELECT COUNT(*) FROM verification_challenges WHERE status = 'failed'")
-        timeout = self._scalar("SELECT COUNT(*) FROM verification_challenges WHERE status = 'expired'")
-        today = self._scalar(
-            "SELECT COUNT(*) FROM verification_challenges WHERE passed_at >= ?",
-            (today_since,),
-        )
-        last_24h = self._scalar(
-            "SELECT COUNT(*) FROM verification_challenges WHERE created_at >= ?",
-            (last_24h_since,),
-        )
-        last_7d = self._scalar(
-            "SELECT COUNT(*) FROM verification_challenges WHERE created_at >= ?",
-            (last_7d_since,),
-        )
+        last_24h_since = (now - timedelta(days=1)).isoformat()
+        last_7d_since = (now - timedelta(days=7)).isoformat()
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) AS success,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failure,
+                    SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS timeout,
+                    SUM(CASE WHEN passed_at >= ? THEN 1 ELSE 0 END) AS today,
+                    SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS last_24h,
+                    SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS last_7d
+                FROM verification_challenges
+                """,
+                (today_since, last_24h_since, last_7d_since),
+            ).fetchone()
+        total = int(row["total"]) if row and row["total"] is not None else 0
+        success = int(row["success"]) if row and row["success"] is not None else 0
+        failure = int(row["failure"]) if row and row["failure"] is not None else 0
+        timeout = int(row["timeout"]) if row and row["timeout"] is not None else 0
+        today = int(row["today"]) if row and row["today"] is not None else 0
+        last_24h = int(row["last_24h"]) if row and row["last_24h"] is not None else 0
+        last_7d = int(row["last_7d"]) if row and row["last_7d"] is not None else 0
         success_rate = (success / total * 100.0) if total else 0.0
         failure_rate = (failure / total * 100.0) if total else 0.0
         timeout_rate = (timeout / total * 100.0) if total else 0.0
@@ -1077,6 +1075,28 @@ class Repository:
             success_rate=success_rate,
             failure_rate=failure_rate,
             timeout_rate=timeout_rate,
+        )
+
+    def get_owner_dashboard_summary(self, *, active_user_days: int = 7) -> OwnerDashboardSummary:
+        stats = self.get_verification_stats()
+        since = (utc_now() - timedelta(days=active_user_days)).isoformat()
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM group_profiles) AS tracked_groups,
+                    (SELECT COUNT(*) FROM group_settings) AS configurable_groups,
+                    (SELECT COUNT(*) FROM user_profiles) AS users,
+                    (SELECT COUNT(*) FROM user_profiles WHERE last_seen_at >= ?) AS active_users
+                """,
+                (since,),
+            ).fetchone()
+        return OwnerDashboardSummary(
+            tracked_groups=int(row["tracked_groups"]) if row and row["tracked_groups"] is not None else 0,
+            configurable_groups=int(row["configurable_groups"]) if row and row["configurable_groups"] is not None else 0,
+            users=int(row["users"]) if row and row["users"] is not None else 0,
+            active_users=int(row["active_users"]) if row and row["active_users"] is not None else 0,
+            verification_stats=stats,
         )
 
     def get_app_setting(self, key: str, default: str | None = None) -> str | None:
@@ -1354,6 +1374,25 @@ def _row_to_group_profile(row: sqlite3.Row) -> GroupProfileRecord:
     )
 
 
+def _row_to_group_summary(row: sqlite3.Row) -> GroupSummary:
+    return GroupSummary(
+        chat_id=int(row["chat_id"]),
+        title=str(row["title"]),
+        alias=str(row["alias"]).strip() if row["alias"] else None,
+        member_count=int(row["member_count"]),
+        admin_count=int(row["admin_count"]),
+        verification_enabled=bool(
+            row["settings_enabled"] if row["settings_enabled"] is not None else row["verification_enabled"]
+        ),
+        auto_delete_seconds=int(
+            row["settings_auto_delete"] if row["settings_auto_delete"] is not None else row["auto_delete_seconds"]
+        ),
+        joined_at=row["joined_at"],
+        last_active_at=row["last_active_at"],
+        risk_level=str(row["risk_level"]),
+    )
+
+
 def _row_to_user_profile(row: sqlite3.Row) -> UserProfileRecord:
     return UserProfileRecord(
         user_id=int(row["user_id"]),
@@ -1394,6 +1433,7 @@ def _row_to_config_group(row: sqlite3.Row) -> ConfigGroupSummary:
     return ConfigGroupSummary(
         chat_id=int(row["chat_id"]),
         title=str(row["title"] or ""),
+        alias=str(row["alias"]).strip() if row["alias"] else None,
         tracked=row["profile_chat_id"] is not None,
         enabled=bool(row["enabled"]),
         timeout_seconds=int(row["timeout_seconds"]),

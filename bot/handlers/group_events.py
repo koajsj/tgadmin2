@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from aiogram import Bot, Router
@@ -18,6 +19,8 @@ from bot.utils import schedule_delete
 GROUP_CHAT_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 ACTIVE_GROUP_STATUSES = {"member", "administrator", "creator"}
 LOGGER = logging.getLogger(__name__)
+GROUP_PROFILE_REFRESH_TTL_SECONDS = 60.0
+GROUP_ACTIVITY_TOUCH_TTL_SECONDS = 30.0
 
 
 def build_group_router(
@@ -28,6 +31,33 @@ def build_group_router(
     owner_id: int,
 ) -> Router:
     router = Router(name="group-events")
+    profile_refresh_cache: dict[int, float] = {}
+    activity_touch_cache: dict[int, float] = {}
+
+    async def refresh_group_profile(
+        bot: Bot,
+        chat_id: int,
+        title: str | None,
+        *,
+        force: bool = False,
+    ) -> None:
+        if not _should_run(
+            profile_refresh_cache,
+            chat_id,
+            GROUP_PROFILE_REFRESH_TTL_SECONDS,
+            force=force,
+        ):
+            return
+        await _refresh_group_profile(bot, repository, chat_id, title)
+
+    def touch_group_activity(chat_id: int, title: str | None, last_active_at: str) -> None:
+        if not _should_run(activity_touch_cache, chat_id, GROUP_ACTIVITY_TOUCH_TTL_SECONDS):
+            return
+        repository.touch_group_profile(
+            chat_id,
+            title=title or str(chat_id),
+            last_active_at=last_active_at,
+        )
 
     @router.my_chat_member()
     async def on_bot_membership_changed(event: ChatMemberUpdated, bot: Bot) -> None:
@@ -54,7 +84,7 @@ def build_group_router(
             old_status=_status_name(old_status),
             new_status=_status_name(new_status),
         )
-        await _refresh_group_profile(bot, repository, event.chat.id, event.chat.title)
+        await refresh_group_profile(bot, event.chat.id, event.chat.title, force=True)
 
     @router.chat_member()
     async def on_chat_member_update(event: ChatMemberUpdated, bot: Bot) -> None:
@@ -72,7 +102,7 @@ def build_group_router(
             old_status=str(old_status),
             new_status=str(new_status),
         )
-        await _refresh_group_profile(bot, repository, event.chat.id, event.chat.title)
+        await refresh_group_profile(bot, event.chat.id, event.chat.title)
 
     @router.message(
         lambda message: message.chat.type in GROUP_CHAT_TYPES
@@ -90,11 +120,7 @@ def build_group_router(
             seen_at=now,
             count_message=True,
         )
-        repository.touch_group_profile(
-            message.chat.id,
-            title=message.chat.title or str(message.chat.id),
-            last_active_at=now,
-        )
+        touch_group_activity(message.chat.id, message.chat.title, now)
 
     @router.message(lambda message: bool(message.new_chat_members))
     async def on_new_members(message: Message, bot: Bot) -> None:
@@ -102,7 +128,7 @@ def build_group_router(
             return
 
         settings = repository.ensure_group_settings(message.chat.id)
-        await _refresh_group_profile(bot, repository, message.chat.id, message.chat.title)
+        await refresh_group_profile(bot, message.chat.id, message.chat.title, force=True)
         if not settings.enabled:
             return
 
@@ -200,6 +226,21 @@ async def _refresh_group_profile(bot: Bot, repository: Repository, chat_id: int,
 def _status_name(status: object | None) -> str:
     value = getattr(status, "value", status)
     return str(value or "")
+
+
+def _should_run(
+    cache: dict[int, float],
+    chat_id: int,
+    ttl_seconds: float,
+    *,
+    force: bool = False,
+) -> bool:
+    now = time.monotonic()
+    last_run = cache.get(chat_id)
+    if not force and last_run is not None and (now - last_run) < ttl_seconds:
+        return False
+    cache[chat_id] = now
+    return True
 
 
 def _is_active_group_status(status: object | None) -> bool:

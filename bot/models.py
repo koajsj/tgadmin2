@@ -111,6 +111,15 @@ class VerificationStats:
 
 
 @dataclass(slots=True)
+class OwnerDashboardSummary:
+    tracked_groups: int
+    configurable_groups: int
+    users: int
+    active_users: int
+    verification_stats: VerificationStats
+
+
+@dataclass(slots=True)
 class RuntimeSnapshot:
     hostname: str
     platform: str
@@ -158,6 +167,7 @@ class GitSnapshot:
 class GroupSummary:
     chat_id: int
     title: str
+    alias: str | None
     member_count: int
     admin_count: int
     verification_enabled: bool
@@ -171,6 +181,7 @@ class GroupSummary:
 class ConfigGroupSummary:
     chat_id: int
     title: str
+    alias: str | None
     tracked: bool
     enabled: bool
     timeout_seconds: int

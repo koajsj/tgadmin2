@@ -91,32 +91,31 @@ def build_owner_router(
     def clamp(value: int, minimum: int, maximum: int) -> int:
         return max(minimum, min(maximum, value))
 
-    def primary_group_name(chat_id: int, title: str) -> str:
-        alias = repository.get_group_alias(chat_id)
+    def primary_group_name(chat_id: int, title: str, alias: str | None = None) -> str:
         if alias:
             return alias
         if title:
             return title
         return f"群 {chat_id}"
 
-    def secondary_group_name(chat_id: int, title: str) -> str | None:
-        alias = repository.get_group_alias(chat_id)
+    def secondary_group_name(title: str, alias: str | None = None) -> str | None:
         if alias and title and alias != title:
             return title
         return None
 
     def format_config_name(group: ConfigGroupSummary) -> str:
-        return primary_group_name(group.chat_id, group.title)
+        return primary_group_name(group.chat_id, group.title, group.alias)
 
     def format_group_status(group: ConfigGroupSummary) -> str:
         return "已接入" if group.tracked else "仅预配置"
 
     def render_panel_text() -> str:
-        tracked_groups = repository.count_groups()
-        configurable_groups = repository.count_configurable_groups()
-        users = repository.count_users()
-        active_users = repository.count_active_users()
-        stats = repository.get_verification_stats()
+        summary = repository.get_owner_dashboard_summary()
+        tracked_groups = summary.tracked_groups
+        configurable_groups = summary.configurable_groups
+        users = summary.users
+        active_users = summary.active_users
+        stats = summary.verification_stats
         pending_only = max(0, configurable_groups - tracked_groups)
         return "\n".join(
             [
@@ -235,7 +234,7 @@ def build_owner_router(
             lines.append("当前还没有已接入群。")
         else:
             for item in groups:
-                label = escape(primary_group_name(item.chat_id, item.title))
+                label = escape(primary_group_name(item.chat_id, item.title, item.alias))
                 lines.append(
                     f"• {label} | 成员 {item.member_count} | 管理员 {item.admin_count} | "
                     f"{'开启' if item.verification_enabled else '关闭'}"
@@ -247,7 +246,7 @@ def build_owner_router(
             rows.append(
                 [
                     button(
-                        safe_label(primary_group_name(item.chat_id, item.title)),
+                        safe_label(primary_group_name(item.chat_id, item.title, item.alias)),
                         f"own:co:{item.chat_id}:{page}",
                     )
                 ]
@@ -270,9 +269,9 @@ def build_owner_router(
             raise ValueError("group config not found")
 
         tracked_summary = repository.get_group_summary(chat_id)
-        alias = repository.get_group_alias(chat_id)
-        display_name = primary_group_name(chat_id, config.title)
-        original_title = secondary_group_name(chat_id, config.title)
+        alias = config.alias if config.alias else (tracked_summary.alias if tracked_summary else None)
+        display_name = primary_group_name(chat_id, config.title, alias)
+        original_title = secondary_group_name(config.title, alias)
         pending_count = repository.count_pending_challenges(chat_id)
 
         lines = [

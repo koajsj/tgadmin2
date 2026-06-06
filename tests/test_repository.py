@@ -256,3 +256,67 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(profile.chat_id, -100789)
         self.assertTrue(settings.enabled)
         self.assertEqual(settings.timeout_seconds, 600)
+
+    def test_group_summaries_include_aliases(self) -> None:
+        self.repository.ensure_group_settings(-100321)
+        self.repository.set_group_alias(-100321, "Business Group")
+        self.repository.touch_group_profile(
+            -100321,
+            title="Original Group",
+            member_count=42,
+            admin_count=3,
+        )
+
+        config = self.repository.get_configurable_group(-100321)
+        tracked = self.repository.get_group_summary(-100321)
+        groups = self.repository.list_groups()
+
+        self.assertIsNotNone(config)
+        self.assertIsNotNone(tracked)
+        assert config is not None
+        assert tracked is not None
+        self.assertEqual(config.alias, "Business Group")
+        self.assertEqual(tracked.alias, "Business Group")
+        self.assertEqual(groups[0].alias, "Business Group")
+
+    def test_owner_dashboard_summary_aggregates_core_counts(self) -> None:
+        fixed_now = datetime(2026, 6, 6, 12, 0, tzinfo=timezone.utc)
+        self.repository.ensure_group_settings(-100111)
+        self.repository.ensure_group_settings(-100222)
+        self.repository.touch_group_profile(
+            -100111,
+            title="Tracked Group",
+            member_count=10,
+            admin_count=2,
+        )
+        self.repository.record_user_seen(
+            1,
+            "alice",
+            "Alice",
+            seen_at=(fixed_now - timedelta(days=1)).isoformat(),
+        )
+        self.repository.record_user_seen(
+            2,
+            "bob",
+            "Bob",
+            seen_at=(fixed_now - timedelta(days=9)).isoformat(),
+        )
+        self.repository.create_challenge(
+            chat_id=-100111,
+            user_id=1,
+            user_chat_instance=None,
+            join_message_id=1,
+            start_token="summary-token",
+            challenge_text="river 42 maple",
+            expected_response="MAPLE-42-RIVER",
+            timeout_seconds=600,
+        )
+
+        with patch.object(repository_module, "utc_now", return_value=fixed_now):
+            summary = self.repository.get_owner_dashboard_summary()
+
+        self.assertEqual(summary.tracked_groups, 1)
+        self.assertEqual(summary.configurable_groups, 2)
+        self.assertEqual(summary.users, 2)
+        self.assertEqual(summary.active_users, 1)
+        self.assertEqual(summary.verification_stats.total, 1)

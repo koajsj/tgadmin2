@@ -222,3 +222,21 @@ class RepositoryTests(unittest.TestCase):
 
         self.assertEqual(stats.total, 2)
         self.assertEqual(stats.today, 1)
+
+    def test_list_configurable_groups_includes_preconfigured_group_without_profile(self) -> None:
+        self.repository.ensure_group_settings(-100123)
+
+        groups = self.repository.list_configurable_groups()
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].chat_id, -100123)
+        self.assertFalse(groups[0].tracked)
+
+    def test_group_alias_can_be_set_and_cleared(self) -> None:
+        self.repository.ensure_group_settings(-100456)
+
+        self.repository.set_group_alias(-100456, "业务群")
+        self.assertEqual(self.repository.get_group_alias(-100456), "业务群")
+
+        self.repository.set_group_alias(-100456, None)
+        self.assertIsNone(self.repository.get_group_alias(-100456))

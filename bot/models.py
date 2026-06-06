@@ -168,6 +168,18 @@ class GroupSummary:
 
 
 @dataclass(slots=True)
+class ConfigGroupSummary:
+    chat_id: int
+    title: str
+    tracked: bool
+    enabled: bool
+    timeout_seconds: int
+    expire_action: str
+    auto_delete_seconds: int
+    last_active_at: str | None
+
+
+@dataclass(slots=True)
 class UserSummary:
     user_id: int
     username: str | None

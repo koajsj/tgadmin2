@@ -4,8 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SERVICE_NAME="${SERVICE_NAME:-tgadmin2}"
-RUN_USER="${SUDO_USER:-${USER}}"
-RUN_GROUP="$(id -gn "${RUN_USER}")"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 ENV_FILE="${PROJECT_ROOT}/.env"
 DB_PATH_DEFAULT="${PROJECT_ROOT}/data/bot.sqlite3"
@@ -18,6 +16,23 @@ as_root() {
     sudo "$@"
   fi
 }
+
+resolve_service_user() {
+  local preferred_user="${SUDO_USER:-${USER}}"
+  local project_owner
+
+  project_owner="$(stat -c '%U' "${PROJECT_ROOT}")"
+
+  if [[ -n "${preferred_user}" && "${preferred_user}" == "${project_owner}" ]]; then
+    printf '%s\n' "${preferred_user}"
+    return
+  fi
+
+  printf '%s\n' "${project_owner}"
+}
+
+RUN_USER="$(resolve_service_user)"
+RUN_GROUP="$(id -gn "${RUN_USER}")"
 
 if [[ -z "${BOT_TOKEN_VALUE}" ]]; then
   printf "Please enter BOT_TOKEN: "

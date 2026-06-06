@@ -9,6 +9,7 @@ from typing import Any
 
 from bot.models import (
     AuditLogRecord,
+    ConfigGroupSummary,
     DatabaseSnapshot,
     GitSnapshot,
     GroupProfileRecord,
@@ -228,6 +229,68 @@ class Repository:
             )
             self._connection.commit()
             return self.get_group_settings(chat_id)
+
+    def count_configurable_groups(self) -> int:
+        with self._lock:
+            row = self._connection.execute("SELECT COUNT(*) AS count FROM group_settings").fetchone()
+            return int(row["count"])
+
+    def list_configurable_groups(self, limit: int = 20, offset: int = 0) -> list[ConfigGroupSummary]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT
+                    gs.chat_id,
+                    gs.enabled,
+                    gs.timeout_seconds,
+                    gs.expire_action,
+                    gs.auto_delete_seconds,
+                    gs.updated_at,
+                    gp.title,
+                    gp.last_active_at,
+                    gp.chat_id AS profile_chat_id
+                FROM group_settings gs
+                LEFT JOIN group_profiles gp ON gp.chat_id = gs.chat_id
+                ORDER BY COALESCE(gp.last_active_at, gs.updated_at) DESC, gs.chat_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+            return [_row_to_config_group(row) for row in rows]
+
+    def get_configurable_group(self, chat_id: int) -> ConfigGroupSummary | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT
+                    gs.chat_id,
+                    gs.enabled,
+                    gs.timeout_seconds,
+                    gs.expire_action,
+                    gs.auto_delete_seconds,
+                    gs.updated_at,
+                    gp.title,
+                    gp.last_active_at,
+                    gp.chat_id AS profile_chat_id
+                FROM group_settings gs
+                LEFT JOIN group_profiles gp ON gp.chat_id = gs.chat_id
+                WHERE gs.chat_id = ?
+                """,
+                (chat_id,),
+            ).fetchone()
+            return _row_to_config_group(row) if row else None
+
+    def set_group_alias(self, chat_id: int, alias: str | None) -> None:
+        key = f"group_alias:{chat_id}"
+        normalized = (alias or "").strip()
+        if normalized:
+            self.set_app_setting(key, normalized)
+        else:
+            self.delete_app_setting(key)
+
+    def get_group_alias(self, chat_id: int) -> str | None:
+        raw = self.get_app_setting(f"group_alias:{chat_id}")
+        return raw.strip() if raw else None
 
     def get_active_challenge(
         self, chat_id: int, user_id: int, now: datetime | None = None
@@ -1319,6 +1382,19 @@ def _row_to_user_summary(row: sqlite3.Row) -> UserSummary:
         banned_at=row["banned_at"],
         is_banned=bool(row["is_banned"]),
         active=_is_recent(last_seen, days=7),
+    )
+
+
+def _row_to_config_group(row: sqlite3.Row) -> ConfigGroupSummary:
+    return ConfigGroupSummary(
+        chat_id=int(row["chat_id"]),
+        title=str(row["title"] or ""),
+        tracked=row["profile_chat_id"] is not None,
+        enabled=bool(row["enabled"]),
+        timeout_seconds=int(row["timeout_seconds"]),
+        expire_action=str(row["expire_action"]),
+        auto_delete_seconds=int(row["auto_delete_seconds"]),
+        last_active_at=row["last_active_at"],
     )
 
 

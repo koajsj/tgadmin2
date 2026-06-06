@@ -690,15 +690,20 @@ class Repository:
         last_active_at: str | None = None,
         risk_level: str | None = None,
     ) -> GroupProfileRecord:
+        settings = self.ensure_group_settings(chat_id)
         current = self.get_group_profile(chat_id)
         title_value = title if title is not None else (current.title if current else "")
         member_value = member_count if member_count is not None else (current.member_count if current else 0)
         admin_value = admin_count if admin_count is not None else (current.admin_count if current else 0)
         enabled_value = (
-            verification_enabled if verification_enabled is not None else (current.verification_enabled if current else True)
+            verification_enabled
+            if verification_enabled is not None
+            else (current.verification_enabled if current else settings.enabled)
         )
         auto_delete_value = (
-            auto_delete_seconds if auto_delete_seconds is not None else (current.auto_delete_seconds if current else 0)
+            auto_delete_seconds
+            if auto_delete_seconds is not None
+            else (current.auto_delete_seconds if current else settings.auto_delete_seconds)
         )
         joined_value = current.joined_at if current else None
         return self.upsert_group_profile(

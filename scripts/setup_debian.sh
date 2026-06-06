@@ -9,30 +9,14 @@ ENV_FILE="${PROJECT_ROOT}/.env"
 DB_PATH_DEFAULT="${PROJECT_ROOT}/data/bot.sqlite3"
 BOT_TOKEN_VALUE="${BOT_TOKEN:-${1:-}}"
 
-as_root() {
-  if [[ "$(id -u)" -eq 0 ]]; then
-    "$@"
-  else
-    sudo "$@"
-  fi
-}
+source "${SCRIPT_DIR}/deploy_common.sh"
 
-resolve_service_user() {
-  local preferred_user="${SUDO_USER:-${USER}}"
-  local project_owner
+RUN_USER="$(resolve_service_user "${PROJECT_ROOT}")"
+RUN_GROUP="$(resolve_service_group "${RUN_USER}")"
 
-  project_owner="$(stat -c '%U' "${PROJECT_ROOT}")"
-
-  if [[ -n "${preferred_user}" && "${preferred_user}" == "${project_owner}" ]]; then
-    printf '%s\n' "${preferred_user}"
-    return
-  fi
-
-  printf '%s\n' "${project_owner}"
-}
-
-RUN_USER="$(resolve_service_user)"
-RUN_GROUP="$(id -gn "${RUN_USER}")"
+if [[ -z "${BOT_TOKEN_VALUE}" && -f "${ENV_FILE}" ]]; then
+  BOT_TOKEN_VALUE="$(grep -E '^BOT_TOKEN=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
+fi
 
 if [[ -z "${BOT_TOKEN_VALUE}" ]]; then
   printf "Please enter BOT_TOKEN: "
@@ -58,50 +42,20 @@ if [[ ! -d "${PROJECT_ROOT}/.venv" ]]; then
 fi
 
 echo "[4/7] Install Python dependencies"
-"${PROJECT_ROOT}/.venv/bin/python" -m pip install --upgrade pip
-"${PROJECT_ROOT}/.venv/bin/python" -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+install_python_dependencies "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/requirements.txt"
 
 echo "[5/7] Write environment file"
-cat > "${ENV_FILE}" <<EOF
-BOT_TOKEN=${BOT_TOKEN_VALUE}
-OWNER_ID=1095020773
-DB_PATH=${DB_PATH_DEFAULT}
-VERIFY_TIMEOUT_SECONDS=600
-EXPIRE_ACTION=kick
-MAX_FAILED_ATTEMPTS=3
-LOG_LEVEL=INFO
-GROUP_MESSAGE_AUTO_DELETE_SECONDS=0
-SCHEDULER_INTERVAL_SECONDS=30
-SYSTEMD_SERVICE_NAME=${SERVICE_NAME}
-PM2_PROCESS_NAME=${SERVICE_NAME}
-REDIS_URL=
-EOF
+if [[ ! -f "${ENV_FILE}" ]]; then
+  write_default_env_file "${ENV_FILE}" "${BOT_TOKEN_VALUE}" "${PROJECT_ROOT}" "${SERVICE_NAME}"
+else
+  echo "Keeping existing ${ENV_FILE}"
+fi
 chmod 600 "${ENV_FILE}"
 
 echo "[6/7] Install systemd service"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-TMP_SERVICE="$(mktemp)"
-cat > "${TMP_SERVICE}" <<EOF
-[Unit]
-Description=Telegram Group Verification Bot
-After=network.target
-
-[Service]
-Type=simple
-User=${RUN_USER}
-Group=${RUN_GROUP}
-WorkingDirectory=${PROJECT_ROOT}
-EnvironmentFile=${ENV_FILE}
-ExecStart=${PROJECT_ROOT}/.venv/bin/python -m bot.main
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-as_root mv "${TMP_SERVICE}" "${SERVICE_FILE}"
-as_root systemctl daemon-reload
-as_root systemctl enable --now "${SERVICE_NAME}"
+write_systemd_service "${SERVICE_NAME}" "${PROJECT_ROOT}" "${ENV_FILE}" "${RUN_USER}" "${RUN_GROUP}"
+reload_systemd
+enable_systemd_service "${SERVICE_NAME}"
 
 echo "[7/7] Deployment complete"
 echo "Service: ${SERVICE_NAME}"

@@ -21,6 +21,7 @@ def build_private_router(
     membership_service: MembershipService,
     audit_service: AuditService,
     max_failed_attempts: int,
+    owner_id: int,
 ) -> Router:
     router = Router(name="private-chat")
 
@@ -65,6 +66,8 @@ def build_private_router(
     @router.message(lambda message: message.chat.type == ChatType.PRIVATE and bool(message.text) and not message.text.startswith("/"))
     async def handle_private_response(message: Message, bot: Bot) -> None:
         if not message.from_user or not message.text:
+            return
+        if message.from_user.id == owner_id:
             return
         repository.record_user_seen(
             message.from_user.id,

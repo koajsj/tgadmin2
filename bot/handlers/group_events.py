@@ -16,6 +16,7 @@ from bot.storage import Repository
 from bot.utils import schedule_delete
 
 GROUP_CHAT_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+ACTIVE_GROUP_STATUSES = {"member", "administrator", "creator"}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -27,6 +28,33 @@ def build_group_router(
     owner_id: int,
 ) -> Router:
     router = Router(name="group-events")
+
+    @router.my_chat_member()
+    async def on_bot_membership_changed(event: ChatMemberUpdated, bot: Bot) -> None:
+        if event.chat.type not in GROUP_CHAT_TYPES:
+            return
+        old_status = getattr(event.old_chat_member, "status", None)
+        new_status = getattr(event.new_chat_member, "status", None)
+        if _status_name(old_status) == _status_name(new_status):
+            return
+        if not _is_active_group_status(new_status):
+            return
+        settings = repository.ensure_group_settings(event.chat.id)
+        repository.touch_group_profile(
+            event.chat.id,
+            title=event.chat.title or str(event.chat.id),
+            verification_enabled=settings.enabled,
+            auto_delete_seconds=settings.auto_delete_seconds,
+            last_active_at=datetime.now(timezone.utc).isoformat(),
+        )
+        audit_service.log(
+            "bot_group_auto_configured",
+            chat_id=event.chat.id,
+            user_id=event.new_chat_member.user.id,
+            old_status=_status_name(old_status),
+            new_status=_status_name(new_status),
+        )
+        await _refresh_group_profile(bot, repository, event.chat.id, event.chat.title)
 
     @router.chat_member()
     async def on_chat_member_update(event: ChatMemberUpdated, bot: Bot) -> None:
@@ -167,3 +195,12 @@ async def _refresh_group_profile(bot: Bot, repository: Repository, chat_id: int,
         auto_delete_seconds=settings.auto_delete_seconds,
         last_active_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def _status_name(status: object | None) -> str:
+    value = getattr(status, "value", status)
+    return str(value or "")
+
+
+def _is_active_group_status(status: object | None) -> bool:
+    return _status_name(status) in ACTIVE_GROUP_STATUSES

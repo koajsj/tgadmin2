@@ -7,6 +7,12 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+)
 
 from bot.config import Settings
 from bot.db import connect
@@ -22,6 +28,39 @@ from bot.services.verification import VerificationService
 from bot.storage import Repository
 
 LOGGER = logging.getLogger(__name__)
+
+
+async def configure_bot_commands(bot: Bot, owner_id: int) -> None:
+    await bot.set_my_commands(
+        [BotCommand(command="start", description="Start verification")],
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Open owner panel"),
+            BotCommand(command="panel", description="Open owner panel"),
+            BotCommand(command="config", description="Configure group verification"),
+            BotCommand(command="groups", description="List tracked groups"),
+            BotCommand(command="group", description="Open group config"),
+            BotCommand(command="status", description="Show system status"),
+            BotCommand(command="update", description="Pull and update code"),
+            BotCommand(command="cancel", description="Cancel current input"),
+            BotCommand(command="help", description="Show command help"),
+        ],
+        scope=BotCommandScopeChat(chat_id=owner_id),
+    )
+    await bot.set_my_commands(
+        [
+            BotCommand(command="status", description="Show verification status"),
+            BotCommand(command="enable", description="Enable join verification"),
+            BotCommand(command="disable", description="Disable join verification"),
+            BotCommand(command="set_timeout", description="Set verification timeout"),
+            BotCommand(command="set_autodelete", description="Set auto-delete seconds"),
+            BotCommand(command="resend", description="Resend verification link"),
+            BotCommand(command="help", description="Show command help"),
+        ],
+        scope=BotCommandScopeAllChatAdministrators(),
+    )
 
 
 async def run() -> None:
@@ -49,6 +88,7 @@ async def run() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await configure_bot_commands(bot, settings.owner_id)
     me = await bot.get_me()
     LOGGER.info(
         "bot starting username=%s db_path=%s timeout=%s expire_action=%s owner_id=%s",
@@ -74,6 +114,7 @@ async def run() -> None:
         build_admin_router(
             repository,
             verification_service,
+            membership_service,
             audit_service,
             settings.owner_id,
             settings.max_failed_attempts,
@@ -95,6 +136,7 @@ async def run() -> None:
             membership_service,
             audit_service,
             settings.max_failed_attempts,
+            settings.owner_id,
         )
     )
 

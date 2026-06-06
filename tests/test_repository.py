@@ -240,3 +240,19 @@ class RepositoryTests(unittest.TestCase):
 
         self.repository.set_group_alias(-100456, None)
         self.assertIsNone(self.repository.get_group_alias(-100456))
+
+    def test_touch_group_profile_auto_creates_group_settings(self) -> None:
+        profile = self.repository.touch_group_profile(
+            -100789,
+            title="Auto Group",
+            member_count=12,
+            admin_count=2,
+        )
+
+        settings = self.repository.get_group_settings(-100789)
+
+        self.assertIsNotNone(settings)
+        assert settings is not None
+        self.assertEqual(profile.chat_id, -100789)
+        self.assertTrue(settings.enabled)
+        self.assertEqual(settings.timeout_seconds, 600)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from bot.config import Settings
 from bot.models import GitSnapshot
@@ -102,6 +103,28 @@ class RecordingUpdateService(UpdateService):
 
 
 class UpdateServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_membership_service_caches_default_permissions(self) -> None:
+        try:
+            from bot.services.membership import MembershipService, UNRESTRICTED_PERMISSIONS
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"membership service dependencies unavailable: {exc}")
+
+        service = MembershipService(permission_cache_ttl_seconds=300.0)
+        calls = 0
+
+        class FakeBot:
+            async def get_chat(self, chat_id: int) -> object:
+                nonlocal calls
+                calls += 1
+                return SimpleNamespace(permissions=UNRESTRICTED_PERMISSIONS)
+
+        first = await service._resolve_default_permissions(FakeBot(), -100123)  # type: ignore[arg-type]
+        second = await service._resolve_default_permissions(FakeBot(), -100123)  # type: ignore[arg-type]
+
+        self.assertIs(first, UNRESTRICTED_PERMISSIONS)
+        self.assertIs(second, UNRESTRICTED_PERMISSIONS)
+        self.assertEqual(calls, 1)
+
     async def test_run_update_skips_code_rollback_after_dependency_phase(self) -> None:
         inspector = FakeInspector()
         settings = Settings(

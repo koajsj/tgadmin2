@@ -54,6 +54,12 @@ class VerificationChallenge:
 
 
 @dataclass(slots=True)
+class PendingChallengeResolution:
+    challenge: VerificationChallenge | None
+    pending_count: int
+
+
+@dataclass(slots=True)
 class AuditLogRecord:
     id: int
     chat_id: int | None

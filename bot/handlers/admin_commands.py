@@ -79,7 +79,7 @@ def build_admin_router(
             lines.append("No tracked groups available yet.")
         builder = InlineKeyboardBuilder()
         for group in groups:
-            label = group.title or str(group.chat_id)
+            label = group.alias or group.title or str(group.chat_id)
             builder.button(
                 text=label[:18],
                 callback_data=f"grpact:{action}:{page}:{group.chat_id}:{value or '-'}",

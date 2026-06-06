@@ -16,6 +16,7 @@ from bot.models import (
     GroupSettingsRecord,
     GroupSummary,
     OwnerDashboardSummary,
+    PendingChallengeResolution,
     RuntimeSnapshot,
     UserProfileRecord,
     UserSummary,
@@ -335,16 +336,7 @@ class Repository:
             return _row_to_challenge(row) if row else None
 
     def count_pending_challenges_for_user(self, user_id: int) -> int:
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM verification_challenges
-                WHERE user_id = ? AND status = 'pending'
-                """,
-                (user_id,),
-            ).fetchone()
-            return int(row["count"])
+        return self.resolve_pending_challenge_for_user(user_id).pending_count
 
     def set_active_private_challenge(self, user_id: int, challenge_id: int) -> None:
         self.set_app_setting(f"active_private_challenge:{user_id}", str(challenge_id))
@@ -373,6 +365,26 @@ class Repository:
             self.clear_active_private_challenge(user_id)
             return None
         return challenge
+
+    def resolve_pending_challenge_for_user(self, user_id: int) -> PendingChallengeResolution:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT
+                    vc.*,
+                    COUNT(*) OVER() AS pending_count
+                FROM verification_challenges vc
+                WHERE vc.user_id = ? AND vc.status = 'pending'
+                ORDER BY vc.updated_at DESC, vc.id DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return PendingChallengeResolution(challenge=None, pending_count=0)
+            pending_count = int(row["pending_count"]) if row["pending_count"] is not None else 0
+            challenge = _row_to_challenge(row)
+            return PendingChallengeResolution(challenge=challenge, pending_count=pending_count)
 
     def create_challenge(
         self,
@@ -562,7 +574,7 @@ class Repository:
 
     def append_audit_log(
         self, action: str, *, chat_id: int | None, user_id: int | None, details: dict[str, Any]
-    ) -> AuditLogRecord:
+    ) -> None:
         now = utc_now().isoformat()
         payload = json.dumps(details, ensure_ascii=False, sort_keys=True)
         with self._lock:
@@ -574,9 +586,6 @@ class Repository:
                 (chat_id, user_id, action, payload, now),
             )
             self._connection.commit()
-            log_id = self._connection.execute("SELECT last_insert_rowid()").fetchone()[0]
-            row = self._connection.execute("SELECT * FROM audit_logs WHERE id = ?", (log_id,)).fetchone()
-            return _row_to_audit(row)
 
     def list_audit_logs(self, limit: int = 20, offset: int = 0) -> list[AuditLogRecord]:
         with self._lock:
@@ -812,10 +821,12 @@ class Repository:
         verification_successes: int | None = None,
         verification_failures: int | None = None,
         last_verification_at: str | None = None,
+        existing: UserProfileRecord | None = None,
     ) -> UserProfileRecord:
         now = utc_now().isoformat()
         with self._lock:
-            existing = self.get_user_profile(user_id)
+            if existing is None:
+                existing = self.get_user_profile(user_id)
             first_seen = existing.first_seen_at if existing else (seen_at or now)
             last_seen = seen_at or now
             joined_value = joined_at if joined_at is not None else (existing.joined_at if existing else None)
@@ -900,6 +911,7 @@ class Repository:
             full_name=full_name,
             seen_at=seen_at,
             total_messages=total_messages,
+            existing=current,
         )
 
     def record_verification_result(
@@ -922,6 +934,7 @@ class Repository:
             verification_successes=successes,
             verification_failures=failures,
             last_verification_at=seen_at,
+            existing=current,
         )
 
     def mark_user_banned(
@@ -939,6 +952,7 @@ class Repository:
             full_name=full_name or (current.full_name if current else ""),
             banned_at=banned_at or utc_now().isoformat(),
             is_banned=True,
+            existing=current,
         )
 
     def get_user_profile(self, user_id: int) -> UserProfileRecord | None:

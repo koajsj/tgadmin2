@@ -155,6 +155,44 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.count_pending_challenges_for_user(7), 2)
         self.assertEqual(second.user_id, 7)
 
+    def test_resolve_pending_challenge_for_user_returns_latest_and_exact_count(self) -> None:
+        first = self.repository.create_challenge(
+            chat_id=1,
+            user_id=17,
+            user_chat_instance=None,
+            join_message_id=10,
+            start_token="token-r1",
+            challenge_text="river 42 maple",
+            expected_response="MAPLE-42-RIVER",
+            timeout_seconds=600,
+        )
+        second = self.repository.create_challenge(
+            chat_id=2,
+            user_id=17,
+            user_chat_instance=None,
+            join_message_id=11,
+            start_token="token-r2",
+            challenge_text="ember 33 pine",
+            expected_response="PINE-33-EMBER",
+            timeout_seconds=600,
+        )
+        self.connection.execute(
+            "UPDATE verification_challenges SET updated_at = ? WHERE id = ?",
+            ("2026-06-06T12:00:00+00:00", first.id),
+        )
+        self.connection.execute(
+            "UPDATE verification_challenges SET updated_at = ? WHERE id = ?",
+            ("2026-06-06T12:00:05+00:00", second.id),
+        )
+        self.connection.commit()
+
+        resolution = self.repository.resolve_pending_challenge_for_user(17)
+
+        self.assertEqual(resolution.pending_count, 2)
+        self.assertIsNotNone(resolution.challenge)
+        assert resolution.challenge is not None
+        self.assertEqual(resolution.challenge.id, second.id)
+
     def test_record_user_seen_only_counts_group_messages_when_requested(self) -> None:
         profile = self.repository.record_user_seen(88, "alice", "Alice", seen_at="2026-06-06T08:00:00+00:00")
         self.assertEqual(profile.total_messages, 0)

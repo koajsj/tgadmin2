@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from aiogram import Bot
@@ -47,6 +48,10 @@ class ActionResult:
 
 
 class MembershipService:
+    def __init__(self, permission_cache_ttl_seconds: float = 300.0) -> None:
+        self._permission_cache_ttl_seconds = permission_cache_ttl_seconds
+        self._permission_cache: dict[int, tuple[float, ChatPermissions]] = {}
+
     async def is_admin(self, bot: Bot, chat_id: int, user_id: int) -> bool:
         try:
             member = await bot.get_chat_member(chat_id, user_id)
@@ -81,9 +86,15 @@ class MembershipService:
             return ActionResult(False, str(exc))
 
     async def _resolve_default_permissions(self, bot: Bot, chat_id: int) -> ChatPermissions:
+        cached = self._permission_cache.get(chat_id)
+        now = time.monotonic()
+        if cached and (now - cached[0]) < self._permission_cache_ttl_seconds:
+            return cached[1]
         try:
             chat = await bot.get_chat(chat_id)
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
             LOGGER.warning("get_chat permissions failed chat_id=%s error=%s", chat_id, exc)
             return UNRESTRICTED_PERMISSIONS
-        return chat.permissions or UNRESTRICTED_PERMISSIONS
+        permissions = chat.permissions or UNRESTRICTED_PERMISSIONS
+        self._permission_cache[chat_id] = (now, permissions)
+        return permissions

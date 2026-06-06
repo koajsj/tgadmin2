@@ -76,10 +76,12 @@ def build_private_router(
             seen_at=datetime.now(timezone.utc).isoformat(),
         )
         challenge = repository.get_active_private_challenge_for_user(message.from_user.id)
-        if not challenge and repository.count_pending_challenges_for_user(message.from_user.id) == 1:
-            challenge = verification_service.get_latest_pending_for_user(message.from_user.id)
-            if challenge:
-                repository.set_active_private_challenge(message.from_user.id, challenge.id)
+        if not challenge:
+            resolution = repository.resolve_pending_challenge_for_user(message.from_user.id)
+            if resolution.pending_count == 1:
+                challenge = resolution.challenge
+                if challenge:
+                    repository.set_active_private_challenge(message.from_user.id, challenge.id)
         if not challenge:
             await message.answer("当前没有待完成的验证任务，请返回群里重新获取链接。")
             return
